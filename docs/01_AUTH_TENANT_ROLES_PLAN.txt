@@ -1,0 +1,194 @@
+AUTH + TENANT + ROLES - PLAN TECNICO V1
+Fecha: 2026-07-03
+Estado: Ready para implementacion
+
+1) OBJETIVO
+Implementar control de acceso para MSP multi-tenant con seguridad fuerte y bajo costo de operacion.
+
+2) ALCANCE DEL MODULO
+- Login con email/password
+- MFA TOTP para operadores
+- Sesiones JWT + refresh token
+- Multi-tenant isolation
+- Roles base: Admin, Tech, Viewer
+- Politicas por tenant (MFA requerido, caducidad sesion, bloqueo intentos)
+
+3) REGLAS FUNCIONALES
+3.1 Login
+- Input: email, password
+- Si credenciales validas y MFA habilitado: challenge TOTP
+- Si credenciales validas y MFA no habilitado: emite JWT + refresh
+- Si falla: incrementa contador de intentos
+
+3.2 Bloqueo por seguridad
+- 5 intentos fallidos en 15 min => lock temporal 15 min
+- Eventos de lock quedan en audit log
+
+3.3 Refresh
+- Access token: 15 min
+- Refresh token: 30 dias (rotativo)
+- Reuso de refresh invalido => revocar cadena de sesion
+
+3.4 Tenant boundaries
+- Todo operador pertenece a tenant_id
+- Toda consulta y mutacion filtra por tenant_id
+- Nunca retornar recursos de otro tenant
+
+3.5 Roles
+- Admin: gestiona operadores, politicas, endpoints, auditoria
+- Tech: controla endpoints, comandos, transferencias
+- Viewer: solo lectura de estado/auditoria
+
+4) REQUISITOS NO FUNCIONALES
+- p95 login < 400 ms
+- Hash de password: Argon2id
+- JWT firmado con llave rotativa (kid)
+- Auditoria de eventos criticos en tabla dedicada
+
+5) MODELO DE DATOS (MINIMO)
+Tabla tenants:
+- id (uuid pk)
+- name
+- status
+- created_at
+
+Tabla operators:
+- id (uuid pk)
+- tenant_id (fk)
+- email (unique por tenant)
+- password_hash
+- role (admin|tech|viewer)
+- mfa_enabled (bool)
+- mfa_secret_enc (nullable)
+- failed_attempts
+- locked_until
+- last_login_at
+- status
+- created_at
+
+Tabla sessions:
+- id (uuid pk)
+- tenant_id
+- operator_id
+- refresh_token_hash
+- user_agent
+- ip_addr
+- expires_at
+- revoked_at
+- created_at
+
+Tabla tenant_policies:
+- tenant_id (pk/fk)
+- require_mfa (bool)
+- max_failed_attempts
+- lock_minutes
+- access_token_minutes
+- refresh_token_days
+- created_at
+- updated_at
+
+Tabla audit_logs:
+- id (uuid pk)
+- tenant_id
+- operator_id (nullable)
+- event_type
+- event_meta_json
+- source_ip
+- created_at
+
+6) ENDPOINTS API (V1)
+POST /api/v1/auth/login
+POST /api/v1/auth/mfa/verify
+POST /api/v1/auth/refresh
+POST /api/v1/auth/logout
+GET  /api/v1/auth/me
+
+GET  /api/v1/tenants/current
+PATCH /api/v1/tenants/current/policies
+
+GET  /api/v1/operators
+POST /api/v1/operators
+PATCH /api/v1/operators/{id}
+POST /api/v1/operators/{id}/reset-mfa
+
+7) POLITICA DE AUDITORIA
+Registrar al menos:
+- auth.login.success
+- auth.login.failed
+- auth.mfa.challenge
+- auth.mfa.success
+- auth.lock.applied
+- auth.refresh.success
+- auth.refresh.reuse_detected
+- operator.created
+- operator.role.changed
+- tenant.policy.changed
+
+8) PSEUDOCODIGO CLAVE
+8.1 login(email, password)
+- user = findOperatorByEmailAndTenant(email, tenant)
+- if user null: audit failed; return 401
+- if now < user.locked_until: audit lock active; return 423
+- if !verifyArgon2(password, user.password_hash):
+  - increment failed_attempts
+  - if failed_attempts >= policy.max_failed_attempts: locked_until = now + lock_minutes
+  - audit failed
+  - return 401
+- reset failed_attempts
+- if policy.require_mfa OR user.mfa_enabled:
+  - issue short-lived mfa_challenge_token (5 min)
+  - audit mfa challenge
+  - return 202 mfa_required
+- tokens = issueAccessAndRefresh(user)
+- audit login success
+- return 200 tokens
+
+8.2 refresh(refresh_token)
+- h = sha256(refresh_token)
+- session = findSessionByHash(h)
+- if session null OR revoked OR expired: audit invalid; return 401
+- if token already used (rotation check):
+  - revoke family/session chain
+  - audit refresh reuse detected
+  - return 401
+- revoke old refresh
+- issue new access + refresh
+- save new session row
+- audit refresh success
+- return 200 tokens
+
+9) CRITERIOS DE ACEPTACION
+- Login con y sin MFA funciona segun politica
+- Bloqueo temporal se activa por intentos fallidos
+- Refresh rotation implementada y probada
+- Tenant isolation validado en queries
+- Roles respetados en todos los endpoints
+- Eventos de auditoria visibles en DB
+
+10) PLAN DE TESTS
+Unit tests:
+- verifyArgon2, token signer, role guards
+
+Integration tests:
+- login happy path
+- login wrong password + lock
+- mfa required path
+- refresh rotation + reuse detection
+- cross-tenant access denied
+
+Security tests:
+- JWT tampering
+- brute-force timing
+- SQL injection en filtros email/tenant
+
+11) LOW BUDGET TOKEN MODE
+- Para cambios menores del modulo: MINOR
+- Para diseno API/pseudocodigo: MEDIUM
+- Para amenazas de seguridad y bypass de roles: MAX
+
+12) DEFINITION OF DONE
+- API doc minima del modulo
+- Migraciones SQL listas
+- Tests integracion basicos en verde
+- Auditoria activa
+- Sin hallazgos criticos de seguridad abiertos

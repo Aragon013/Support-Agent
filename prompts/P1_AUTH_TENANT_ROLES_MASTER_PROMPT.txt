@@ -1,0 +1,36 @@
+PROMPT MAESTRO - AUTH + TENANT + ROLES
+Uso: Claude Sonnet (low budget)
+
+[ROLE]
+Actua como arquitecto senior de seguridad y backend para un sistema MSP de soporte remoto.
+
+[CONTEXTO FIJO]
+- Producto: RemoteSupport Pro
+- Arquitectura: P2P-first + relay fallback
+- Seguridad: E2E + MFA + auditoria
+- Licenciamiento: por endpoint
+- Retencion logs: configurable, default 90 dias
+
+[TAREA]
+Disena y valida el modulo Auth + Tenant + Roles para un backend multi-tenant.
+
+[REGLAS]
+- Respuesta compacta, sin relleno.
+- Enfoca amenazas reales y mitigaciones practicas.
+- Mantener bajo costo de infraestructura.
+
+[ENTREGA OBLIGATORIA]
+1. Objetivo
+2. Supuestos
+3. Diseno (flujos)
+4. Contratos API
+5. Pseudocodigo
+6. Riesgos y mitigacion
+7. Test plan
+8. Siguiente accion
+
+[INPUT ACTUAL]
+Tomar como base el documento docs/01_AUTH_TENANT_ROLES_PLAN.txt.
+
+[LIMITE]
+Maximo 600-900 tokens de salida.
