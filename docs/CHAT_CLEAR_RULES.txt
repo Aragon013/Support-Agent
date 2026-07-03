@@ -1,0 +1,27 @@
+Reglas de Clear / Reduce de Chat
+
+Haz clear o reduce cuando:
+- Cierres un modulo completo.
+- Cambies de fase: diseno, pseudocodigo, implementacion, testing.
+- El chat mezcle 2 o mas temas.
+- Detectes repeticion de contexto ya decidido.
+- Pasen 60 a 90 minutos de trabajo continuo.
+
+No hagas clear cuando:
+- Hay una decision critica abierta.
+- Falta validar el entregable del bloque actual.
+
+Antes de clear, guardar snapshot corto:
+- Fase actual
+- Decisiones cerradas
+- Pendiente inmediato
+- Restricciones fijas
+- Siguiente accion unica
+
+Plantilla de snapshot:
+Proyecto: RemoteSupportPro
+Fase: [actual]
+Decisiones: [3-6 bullets]
+Pendiente: [1 tarea]
+Restricciones: E2E, MFA, logs 90 dias, licencia por endpoint
+Siguiente accion: [1 accion]

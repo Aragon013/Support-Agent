@@ -1,0 +1,28 @@
+RemoteSupportPro - Project Context Snapshot
+Fecha: 2026-07-03
+
+Objetivo:
+Sistema profesional de soporte remoto tipo TeamViewer para MSP.
+
+Decisiones cerradas:
+- Arquitectura P2P-first con relay fallback.
+- Host Agent nativo en segundo plano.
+- Controller de operador con Electron.
+- Seguridad: E2E obligatorio + MFA.
+- Logs: debug + auditoria con retencion configurable (default 90 dias).
+- Licenciamiento por endpoint.
+- Sin GitHub Release hasta aprobacion explicita.
+
+Modulos maestros:
+- Auth + Tenant + Roles
+- Session + Signaling
+- Host Agent
+- File Transfer
+- Command Engine
+- Audit + Policies
+
+Modo de trabajo:
+- Low budget tokens
+- Minor para tareas pequenas
+- Medium para diseno y pseudocodigo
+- Max solo para seguridad, arquitectura critica o bugs complejos
