@@ -1,0 +1,22 @@
+PROJECT STATUS SNAPSHOT
+Fecha: 2026-07-06
+
+Estado actual:
+- Proyecto bootstrap completado.
+- GitHub conectado y actualizado.
+- Regla de no-release definida.
+- Modulo Auth + Tenant + Roles listo como documento de diseno.
+
+Pendiente inmediato:
+- Modulo Session + Signaling.
+
+Restricciones fijas:
+- E2E obligatorio.
+- MFA obligatorio.
+- Logs con retencion configurable (default 90 dias).
+- Licenciamiento por endpoint.
+- Host agent nativo.
+- Controller con Electron.
+
+Siguiente accion unica:
+- Disenar Session + Signaling.

@@ -1,0 +1,21 @@
+LOW BUDGET OPERATING RULES
+
+Objetivo:
+Minimizar gasto de tokens sin perder calidad de decisiones.
+
+Reglas:
+- Un objetivo principal por turno.
+- Respuestas compactas y sin repetir contexto completo.
+- Documentar decisiones cerradas para reusar contexto.
+- Dividir tareas grandes en micro-bloques.
+- Hacer clear/reduce del chat por modulo o cambio de fase.
+
+Escalado de esfuerzo:
+- MINOR: cambios simples y decisiones pequenas.
+- MEDIUM: diseno tecnico, contratos, pseudocodigo, organizacion modular.
+- MAX: seguridad, arquitectura base, debugging complejo.
+
+GitHub:
+- Si commit estable: hacer commit.
+- Si bloque util cerrado: hacer push.
+- No crear releases sin aprobacion explicita.

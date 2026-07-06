@@ -1,0 +1,52 @@
+REMOTE SUPPORT PRO - FRONT DOOR
+Leer este archivo primero antes de continuar cualquier tarea del proyecto.
+
+1) OBJETIVO
+Construir un sistema profesional de soporte remoto tipo TeamViewer para MSP, con foco en seguridad, bajo costo operativo, compatibilidad y operacion en redes cerradas.
+
+2) DECISIONES CERRADAS
+- Arquitectura: P2P-first con relay fallback.
+- Host Agent: servicio nativo en segundo plano.
+- Controller: aplicacion de operador con Electron.
+- Seguridad: cifrado E2E obligatorio + MFA.
+- Logs: debug + auditoria con retencion configurable, default 90 dias.
+- Licenciamiento: por endpoint.
+- GitHub: sin releases hasta aprobacion explicita.
+
+3) MODO DE TRABAJO
+- Estrategia low budget de tokens.
+- Usar MINOR para tareas pequenas.
+- Usar MEDIUM para diseno, contratos API, pseudocodigo y refactors moderados.
+- Usar MAX solo para arquitectura critica, seguridad o problemas complejos.
+
+4) ORDEN DE LECTURA
+- docs/00_PROJECT_FRONT_DOOR.txt
+- docs/PROJECT_CONTEXT.txt
+- docs/CHAT_CLEAR_RULES.txt
+- docs/01_AUTH_TENANT_ROLES_PLAN.txt
+- prompts/P1_AUTH_TENANT_ROLES_MASTER_PROMPT.txt
+
+5) REGLA DE CLEAR DEL CHAT
+Hacer clear o reduce cuando:
+- Se cierra un modulo completo.
+- Se cambia de fase.
+- Se mezclan 2 o mas temas.
+- Hay repeticion de contexto ya decidido.
+- Pasan 60 a 90 minutos de trabajo continuo.
+
+Antes de clear, guardar snapshot corto:
+- fase actual
+- decisiones cerradas
+- pendiente inmediato
+- restricciones fijas
+- siguiente accion unica
+
+6) ESTADO ACTUAL
+- Workspace creado
+- Repo Git inicializado
+- Remoto GitHub configurado
+- Main publicado en GitHub
+- Modulo 1 Auth + Tenant + Roles documentado
+
+7) SIGUIENTE PASO NATURAL
+Diseñar el modulo Session + Signaling con el mismo formato disciplinado.
