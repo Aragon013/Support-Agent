@@ -64,6 +64,14 @@ export type ControlInputDenyCode =
   | "invalid_payload"
   | "sender_not_controller";
 
+export type ControlInputResultPayload = {
+  result: "accepted" | "denied";
+  action?: string;
+  sessionStatus?: SessionStatus;
+  handledAt: string;
+  denyCode?: ControlInputDenyCode;
+};
+
 export function buildSessionSignalWsUrl(
   cfg: Pick<SessionSignalClientConfig, "controlPlaneUrl" | "tenantId">,
   sessionId: string,
@@ -105,6 +113,33 @@ export function evaluateControlInputPolicy(
   return { ok: true };
 }
 
+export function buildControlInputResultPayload(input: {
+  accepted: boolean;
+  action?: string;
+  sessionStatus?: SessionStatus;
+  denyCode?: ControlInputDenyCode;
+  now?: Date;
+}): ControlInputResultPayload {
+  const handledAt = (input.now ?? new Date()).toISOString();
+
+  if (input.accepted) {
+    return {
+      result: "accepted",
+      handledAt,
+      ...(input.action ? { action: input.action } : {}),
+      ...(input.sessionStatus ? { sessionStatus: input.sessionStatus } : {}),
+    };
+  }
+
+  return {
+    result: "denied",
+    handledAt,
+    ...(input.action ? { action: input.action } : {}),
+    ...(input.sessionStatus ? { sessionStatus: input.sessionStatus } : {}),
+    ...(input.denyCode ? { denyCode: input.denyCode } : {}),
+  };
+}
+
 function isControlInputPayload(payload: Record<string, unknown>): boolean {
   return typeof payload.action === "string" && payload.action.trim().length > 0;
 }
@@ -112,6 +147,7 @@ function isControlInputPayload(payload: Record<string, unknown>): boolean {
 export class SessionSignalClient {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly reconnectDelays = new Map<string, number>();
+  private readonly sessionCache = new Map<string, SessionRecord>();
   private stopping = false;
 
   constructor(
@@ -134,7 +170,22 @@ export class SessionSignalClient {
     }
 
     this.sockets.delete(sessionId);
+    this.sessionCache.delete(sessionId);
     ws.close();
+  }
+
+  syncSessionState(sessionId: string, status: SessionStatus): void {
+    const cached = this.sessionCache.get(sessionId);
+    if (cached) {
+      this.sessionCache.set(sessionId, {
+        ...cached,
+        status,
+      });
+    }
+
+    if (status === "ended" || status === "failed") {
+      this.sessionCache.delete(sessionId);
+    }
   }
 
   stop(): void {
@@ -162,6 +213,8 @@ export class SessionSignalClient {
       return;
     }
 
+    this.sessionCache.set(sessionId, session);
+
     const wsUrl = buildSessionSignalWsUrl(this.cfg, sessionId, 0);
     this.log(`[agent/signal] connecting to ${wsUrl}`);
 
@@ -185,7 +238,7 @@ export class SessionSignalClient {
         return;
       }
 
-      void this.handleSignal(session, frame.message);
+      void this.handleSignal(sessionId, frame.message);
     });
 
     ws.on("error", (err) => {
@@ -213,7 +266,13 @@ export class SessionSignalClient {
     }, current);
   }
 
-  private async handleSignal(session: SessionRecord, msg: SignalMessage): Promise<void> {
+  private async handleSignal(sessionId: string, msg: SignalMessage): Promise<void> {
+    const session = await this.resolveSession(sessionId);
+    if (!session) {
+      this.log(`[agent/signal] missing session cache for ${sessionId}`);
+      return;
+    }
+
     if (msg.senderType !== "controller") {
       return;
     }
@@ -224,44 +283,46 @@ export class SessionSignalClient {
 
     const deniedBySender = msg.senderType !== "controller";
     if (deniedBySender) {
-      await this.postInputResult(session.id, false, "sender_not_controller");
+      await this.postInputResult(session, false, "sender_not_controller", undefined);
       return;
     }
 
     if (!isControlInputPayload(msg.payload)) {
-      await this.postInputResult(session.id, false, "invalid_payload");
+      await this.postInputResult(session, false, "invalid_payload", undefined);
       return;
     }
+
+    const action = String(msg.payload.action);
 
     const policy = evaluateControlInputPolicy(session, this.cfg.allowRemoteInput);
     if (!policy.ok) {
       this.log(
         `[agent/signal] denied control.input for ${session.id}: ${policy.code}`,
       );
-      await this.postInputResult(session.id, false, policy.code);
+      await this.postInputResult(session, false, policy.code, action);
       return;
     }
 
-    const action = String(msg.payload.action);
     this.log(`[agent/signal] accepted control.input for ${session.id}: ${action}`);
-    await this.postInputResult(session.id, true);
+    await this.postInputResult(session, true, undefined, action);
   }
 
   private async postInputResult(
-    sessionId: string,
+    session: SessionRecord,
     accepted: boolean,
     denyCode?: ControlInputDenyCode,
+    action?: string,
   ): Promise<void> {
     const base = this.cfg.controlPlaneUrl.replace(/\/$/, "");
-    const payload: Record<string, unknown> = accepted
-      ? { result: "accepted" }
-      : {
-          result: "denied",
-          denyCode,
-        };
+    const payload = buildControlInputResultPayload({
+      accepted,
+      denyCode,
+      action,
+      sessionStatus: session.status,
+    });
 
     try {
-      const response = await fetch(`${base}/api/v1/sessions/${sessionId}/signal`, {
+      const response = await fetch(`${base}/api/v1/sessions/${session.id}/signal`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -276,14 +337,28 @@ export class SessionSignalClient {
 
       if (!response.ok) {
         this.log(
-          `[agent/signal] failed to post control.input result for ${sessionId}: ${response.status}`,
+          `[agent/signal] failed to post control.input result for ${session.id}: ${response.status}`,
         );
       }
     } catch (e) {
       this.log(
-        `[agent/signal] error posting control.input result for ${sessionId}: ${String(e)}`,
+        `[agent/signal] error posting control.input result for ${session.id}: ${String(e)}`,
       );
     }
+  }
+
+  private async resolveSession(sessionId: string): Promise<SessionRecord | null> {
+    const cached = this.sessionCache.get(sessionId);
+    if (cached) {
+      return cached;
+    }
+
+    const fetched = await this.fetchSession(sessionId);
+    if (fetched) {
+      this.sessionCache.set(sessionId, fetched);
+    }
+
+    return fetched;
   }
 
   private async fetchSession(sessionId: string): Promise<SessionRecord | null> {

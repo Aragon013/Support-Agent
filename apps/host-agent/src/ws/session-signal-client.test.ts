@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildControlInputResultPayload,
   buildSessionSignalWsUrl,
   evaluateControlInputPolicy,
 } from "./session-signal-client.js";
@@ -76,7 +77,7 @@ describe("session-signal-client helpers", () => {
         id: "session-1",
         tenantId: "tenant-1",
         endpointId: "endpoint-1",
-        status: "connecting_p2p",
+        status: "connected_p2p",
         accessMode: "control",
         requestedCapabilities: ["screen", "input"],
       },
@@ -84,5 +85,39 @@ describe("session-signal-client helpers", () => {
     );
 
     expect(result).toEqual({ ok: true });
+  });
+
+  it("builds accepted control input result payload with action and session status", () => {
+    const payload = buildControlInputResultPayload({
+      accepted: true,
+      action: "mouse.move",
+      sessionStatus: "connected_p2p",
+      now: new Date("2026-07-06T12:00:00.000Z"),
+    });
+
+    expect(payload).toEqual({
+      result: "accepted",
+      action: "mouse.move",
+      sessionStatus: "connected_p2p",
+      handledAt: "2026-07-06T12:00:00.000Z",
+    });
+  });
+
+  it("builds denied control input result payload with deny code", () => {
+    const payload = buildControlInputResultPayload({
+      accepted: false,
+      action: "mouse.move",
+      sessionStatus: "signaling",
+      denyCode: "session_not_active",
+      now: new Date("2026-07-06T12:00:00.000Z"),
+    });
+
+    expect(payload).toEqual({
+      result: "denied",
+      action: "mouse.move",
+      sessionStatus: "signaling",
+      denyCode: "session_not_active",
+      handledAt: "2026-07-06T12:00:00.000Z",
+    });
   });
 });

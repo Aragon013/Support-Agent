@@ -36,6 +36,8 @@ const sessionClient = new SessionWsClient({
   endpointId: config.endpointId,
   autoApproveSessions: config.autoApproveSessions,
   onEvent: (event) => {
+    signalClient.syncSessionState(event.sessionId, event.status as Parameters<typeof signalClient.syncSessionState>[1]);
+
     const activeStatuses = new Set([
       "signaling",
       "connecting_p2p",
