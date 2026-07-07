@@ -86,6 +86,24 @@ function isSignalStateAllowed(
   status: SessionStatus,
   messageType: SessionSignalMessageType,
 ): boolean {
+  if (messageType === "control.input") {
+    return (
+      status === "connected_p2p" ||
+      status === "connected_relay" ||
+      status === "reconnecting"
+    );
+  }
+
+  if (messageType === "clipboard.sync") {
+    return (
+      status === "signaling" ||
+      status === "connecting_p2p" ||
+      status === "connected_p2p" ||
+      status === "connected_relay" ||
+      status === "reconnecting"
+    );
+  }
+
   if (messageType !== "screen.frame.stub") {
     return true;
   }

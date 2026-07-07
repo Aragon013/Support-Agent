@@ -100,18 +100,17 @@ describe("session signaling websocket", () => {
       url: `/api/v1/sessions/${sessionId}/signal`,
       payload: {
         senderType: "controller",
-        messageType: "control.input",
+        messageType: "clipboard.sync",
         payload: {
-          action: "mouse.move",
-          x: 100,
-          y: 140,
+          text: "hello",
+          format: "text/plain",
         },
       },
     });
 
     const frame = await waitForFrame(
       ws,
-      (f) => f.type === "session.signal" && f.message?.messageType === "control.input",
+      (f) => f.type === "session.signal" && f.message?.messageType === "clipboard.sync",
     );
 
     expect(frame.message?.senderType).toBe("controller");
@@ -162,10 +161,10 @@ describe("session signaling websocket", () => {
       },
       payload: {
         senderType: "controller",
-        messageType: "control.input",
+        messageType: "clipboard.sync",
         payload: {
-          action: "mouse.click",
-          button: "left",
+          text: "sync-text",
+          format: "text/plain",
         },
       },
     });
@@ -173,7 +172,7 @@ describe("session signaling websocket", () => {
 
     const hostFrame = await waitForFrame(
       hostWs,
-      (f) => f.type === "session.signal" && f.message?.messageType === "control.input",
+      (f) => f.type === "session.signal" && f.message?.messageType === "clipboard.sync",
     );
     expect(hostFrame.message?.senderType).toBe("controller");
 
