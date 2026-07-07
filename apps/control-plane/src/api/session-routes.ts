@@ -82,6 +82,21 @@ function isSignalDirectionAllowed(
   );
 }
 
+function isSignalStateAllowed(
+  status: SessionStatus,
+  messageType: SessionSignalMessageType,
+): boolean {
+  if (messageType !== "screen.frame.stub") {
+    return true;
+  }
+
+  return (
+    status === "connected_p2p" ||
+    status === "connected_relay" ||
+    status === "reconnecting"
+  );
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -361,6 +376,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         return reply.code(403).send({
           code: "policy_denied",
           reason: "message_direction_invalid",
+        });
+      }
+
+      if (!isSignalStateAllowed(found.status, messageType)) {
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: "message_state_invalid",
         });
       }
 

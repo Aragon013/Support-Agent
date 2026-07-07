@@ -60,6 +60,10 @@ async function waitForFrame(
   });
 }
 
+async function waitMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe("session signaling websocket", () => {
   it("streams signal messages to websocket subscribers", async () => {
     const app = buildApp();
@@ -114,6 +118,71 @@ describe("session signaling websocket", () => {
     expect(frame.message?.sessionId).toBe(sessionId);
 
     ws.ws.close();
+    await app.close();
+  });
+
+  it("does not echo signaling frames to same participant type", async () => {
+    const app = buildApp();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+
+    const address = app.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("failed to resolve listening port");
+    }
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal-ws",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const hostWs = await openSocket(
+      `ws://127.0.0.1:${address.port}/api/v1/sessions/${sessionId}/signal/ws?tenantId=tenant-signal-ws&participantType=host`,
+    );
+    const controllerWs = await openSocket(
+      `ws://127.0.0.1:${address.port}/api/v1/sessions/${sessionId}/signal/ws?tenantId=tenant-signal-ws&participantType=controller`,
+    );
+
+    const post = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      headers: {
+        "x-participant-type": "controller",
+      },
+      payload: {
+        senderType: "controller",
+        messageType: "control.input",
+        payload: {
+          action: "mouse.click",
+          button: "left",
+        },
+      },
+    });
+    expect(post.statusCode).toBe(201);
+
+    const hostFrame = await waitForFrame(
+      hostWs,
+      (f) => f.type === "session.signal" && f.message?.messageType === "control.input",
+    );
+    expect(hostFrame.message?.senderType).toBe("controller");
+
+    await waitMs(250);
+    const controllerSignals = controllerWs.frames.filter((f) => f.type === "session.signal");
+    expect(controllerSignals.length).toBe(0);
+
+    hostWs.ws.close();
+    controllerWs.ws.close();
     await app.close();
   });
 });

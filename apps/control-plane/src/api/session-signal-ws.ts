@@ -44,6 +44,9 @@ export class SessionSignalWsHub {
       if (client.sessionId !== message.sessionId || client.tenantId !== message.tenantId) {
         continue;
       }
+      if (client.participantType && client.participantType === message.senderType) {
+        continue;
+      }
       if (client.socket.readyState === 1) {
         client.socket.send(frame);
       }
@@ -79,6 +82,9 @@ export class SessionSignalWsHub {
     const replay = this.signalStore.list(opts.sessionId, opts.sinceSeq);
     for (const msg of replay) {
       if (msg.tenantId !== opts.tenantId) {
+        continue;
+      }
+      if (opts.participantType && opts.participantType === msg.senderType) {
         continue;
       }
       socket.send(JSON.stringify({ v: 1, type: "session.signal", message: msg }));
