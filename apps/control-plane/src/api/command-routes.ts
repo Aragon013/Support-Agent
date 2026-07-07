@@ -145,10 +145,19 @@ function lifecycleAuditCode(status: CommandJobStatus): AuditEventCode {
 }
 
 export function registerCommandRoutes(app: FastifyInstance): void {
+  registerCommandRoutesWithDeps(app, {});
+}
+
+export function registerCommandRoutesWithDeps(
+  app: FastifyInstance,
+  deps: {
+    auditStore?: InMemoryAuditLogStore;
+  },
+): void {
   const store = new InMemoryCommandJobStore();
   const mfaStore = new InMemoryMfaStepupStore();
   const eventBus = new InMemoryCommandEventBus();
-  const auditStore = new InMemoryAuditLogStore(RETENTION_DAYS_DEFAULT);
+  const auditStore = deps.auditStore ?? new InMemoryAuditLogStore(RETENTION_DAYS_DEFAULT);
   const wsHub = new CommandEventsWsHub();
   const detachWs = wsHub.attach(eventBus);
 

@@ -11,6 +11,7 @@ import {
   type SessionStatus,
 } from "../domain/session.js";
 import { InMemorySessionEventBus } from "../domain/session-event-bus.js";
+import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
 import {
   registerSessionEventsWsRoute,
   SessionEventsWsHub,
@@ -172,8 +173,18 @@ function emitStateChanged(
 }
 
 export function registerSessionRoutes(app: FastifyInstance): void {
+  registerSessionRoutesWithDeps(app, {});
+}
+
+export function registerSessionRoutesWithDeps(
+  app: FastifyInstance,
+  deps: {
+    auditStore?: InMemoryAuditLogStore;
+  },
+): void {
   const store = new InMemorySessionStore();
   const eventBus = new InMemorySessionEventBus();
+  const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
   const signalStore = new InMemorySessionSignalStore();
   const wsHub = new SessionEventsWsHub();
   const signalWsHub = new SessionSignalWsHub(signalStore);
@@ -391,6 +402,19 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
 
       if (!isSignalDirectionAllowed(senderType, messageType)) {
+        auditStore.append({
+          tenantId: found.tenantId,
+          endpointId: found.endpointId,
+          operatorId: found.operatorId,
+          code: "session.signal.policy_denied",
+          details: {
+            sessionId: found.id,
+            senderType,
+            messageType,
+            reason: "message_direction_invalid",
+            status: found.status,
+          },
+        });
         return reply.code(403).send({
           code: "policy_denied",
           reason: "message_direction_invalid",
@@ -398,6 +422,19 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
 
       if (!isSignalStateAllowed(found.status, messageType)) {
+        auditStore.append({
+          tenantId: found.tenantId,
+          endpointId: found.endpointId,
+          operatorId: found.operatorId,
+          code: "session.signal.policy_denied",
+          details: {
+            sessionId: found.id,
+            senderType,
+            messageType,
+            reason: "message_state_invalid",
+            status: found.status,
+          },
+        });
         return reply.code(403).send({
           code: "policy_denied",
           reason: "message_state_invalid",

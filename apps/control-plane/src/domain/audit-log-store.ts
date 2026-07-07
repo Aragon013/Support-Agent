@@ -14,7 +14,8 @@ export type AuditEventCode =
   | "command.job.retry"
   | "command.mfa.challenge.issued"
   | "command.mfa.challenge.failed"
-  | "command.mfa.challenge.verified";
+  | "command.mfa.challenge.verified"
+  | "session.signal.policy_denied";
 
 export type AuditLogRecord = {
   id: string;

@@ -245,6 +245,19 @@ describe("session routes", () => {
     expect(signal.statusCode).toBe(403);
     expect(signal.json().reason).toBe("message_direction_invalid");
 
+    const audit = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit?tenantId=tenant-signal&operatorId=operator-1",
+    });
+
+    expect(audit.statusCode).toBe(200);
+    const auditBody = audit.json() as {
+      items: Array<{ code: string; details: Record<string, unknown> }>;
+    };
+    const denial = auditBody.items.find((item) => item.code === "session.signal.policy_denied");
+    expect(denial?.details.reason).toBe("message_direction_invalid");
+    expect(denial?.details.messageType).toBe("signal.offer");
+
     await app.close();
   });
 
