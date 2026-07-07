@@ -5,6 +5,7 @@ export type SessionClientConfig = {
   tenantId: string;
   endpointId: string;
   autoApproveSessions?: boolean;
+  onEvent?: (event: SessionEvent) => void;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
 };
@@ -12,7 +13,11 @@ export type SessionClientConfig = {
 type SessionEvent = {
   name: string;
   sessionId: string;
+  tenantId: string;
   endpointId: string;
+  operatorId: string;
+  status: string;
+  details?: Record<string, unknown>;
 };
 
 type WsSessionFrame = {
@@ -99,6 +104,8 @@ export class SessionWsClient {
       if (evt.endpointId !== this.cfg.endpointId) {
         return;
       }
+
+      this.cfg.onEvent?.(evt);
 
       if (shouldAutoApproveSession(evt.name, this.cfg.autoApproveSessions ?? false)) {
         void this.approveSession(evt.sessionId);
