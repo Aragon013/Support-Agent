@@ -47,6 +47,11 @@ type DenySessionBody = {
   reason?: string;
 };
 
+type InternalStateBody = {
+  status?: SessionStatus;
+  routeMode?: "direct" | "relay";
+};
+
 type SignalParams = {
   id: string;
 };
@@ -314,6 +319,57 @@ export function registerSessionRoutesWithDeps(
       }
 
       return reply.code(200).send(found);
+    },
+  );
+
+  app.post(
+    "/api/v1/internal/sessions/:id/state",
+    async (
+      req: FastifyRequest<{ Params: IdParams; Body: InternalStateBody }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      const target = req.body?.status;
+      const routeMode = req.body?.routeMode;
+      if (
+        target !== "signaling" &&
+        target !== "connecting_p2p" &&
+        target !== "connected_p2p" &&
+        target !== "connected_relay" &&
+        target !== "reconnecting" &&
+        target !== "failed" &&
+        target !== "ended"
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "status is invalid",
+        });
+      }
+
+      const updated = store.updateStatus(found.id, target, {
+        ...(routeMode ? { routeMode } : {}),
+      });
+      if (!updated) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "session cannot transition to requested state",
+        });
+      }
+
+      emitStateChanged(eventBus, updated, found.status);
+
+      return reply.code(200).send({
+        sessionId: updated.id,
+        status: updated.status,
+        routeMode: updated.routeMode,
+      });
     },
   );
 

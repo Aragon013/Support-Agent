@@ -426,4 +426,62 @@ describe("session routes", () => {
 
     await app.close();
   });
+
+  it("accepts control input after session transitions to connected_p2p", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        accessMode: "control",
+        requestedCapabilities: ["screen", "input", "clipboard"],
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const transition = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/sessions/${sessionId}/state`,
+      payload: {
+        status: "connected_p2p",
+        routeMode: "direct",
+      },
+    });
+
+    expect(transition.statusCode).toBe(200);
+    expect(transition.json().status).toBe("connected_p2p");
+    expect(transition.json().routeMode).toBe("direct");
+
+    const signal = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      headers: {
+        "x-participant-type": "controller",
+      },
+      payload: {
+        senderType: "controller",
+        messageType: "control.input",
+        payload: {
+          action: "mouse.move",
+          x: 640,
+          y: 360,
+        },
+      },
+    });
+
+    expect(signal.statusCode).toBe(201);
+    expect(signal.json().item.messageType).toBe("control.input");
+
+    await app.close();
+  });
 });
