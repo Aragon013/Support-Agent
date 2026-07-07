@@ -159,4 +159,54 @@ describe("session routes", () => {
 
     await app.close();
   });
+
+  it("accepts and lists session signaling messages", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const signal = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      payload: {
+        senderType: "controller",
+        messageType: "signal.offer",
+        payload: {
+          sdp: "v=0...",
+          e2ePubKey: "pub-key",
+        },
+      },
+    });
+
+    expect(signal.statusCode).toBe(201);
+    expect(signal.json().item.messageType).toBe("signal.offer");
+
+    const list = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${sessionId}/signal?afterSeq=0`,
+    });
+
+    expect(list.statusCode).toBe(200);
+    const body = list.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.items.length).toBe(1);
+    expect(body.items[0].messageType).toBe("signal.offer");
+
+    await app.close();
+  });
 });

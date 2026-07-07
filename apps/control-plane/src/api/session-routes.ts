@@ -15,6 +15,16 @@ import {
   registerSessionEventsWsRoute,
   SessionEventsWsHub,
 } from "./session-events-ws.js";
+import {
+  InMemorySessionSignalStore,
+  SIGNAL_MESSAGE_TYPES,
+  type SessionSignalMessageType,
+  type SessionSignalSenderType,
+} from "../domain/session-signal-store.js";
+import {
+  registerSessionSignalWsRoute,
+  SessionSignalWsHub,
+} from "./session-signal-ws.js";
 
 type CreateSessionBody = {
   tenantId: string;
@@ -34,6 +44,20 @@ type EndpointPolicyParams = {
 
 type DenySessionBody = {
   reason?: string;
+};
+
+type SignalParams = {
+  id: string;
+};
+
+type SignalQuery = {
+  afterSeq?: string;
+};
+
+type SignalBody = {
+  senderType?: SessionSignalSenderType;
+  messageType?: SessionSignalMessageType;
+  payload?: Record<string, unknown>;
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -95,10 +119,13 @@ function emitStateChanged(
 export function registerSessionRoutes(app: FastifyInstance): void {
   const store = new InMemorySessionStore();
   const eventBus = new InMemorySessionEventBus();
+  const signalStore = new InMemorySessionSignalStore();
   const wsHub = new SessionEventsWsHub();
+  const signalWsHub = new SessionSignalWsHub(signalStore);
   const detachWs = wsHub.attach(eventBus);
 
   registerSessionEventsWsRoute(app, wsHub);
+  registerSessionSignalWsRoute(app, signalWsHub, (id) => store.getById(id));
 
   app.addHook("onClose", async () => {
     detachWs();
@@ -254,6 +281,92 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       return reply.code(200).send({
         sessionId: updated.id,
         status: updated.status,
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/sessions/:id/signal",
+    async (
+      req: FastifyRequest<{ Params: SignalParams; Body: SignalBody }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      if (found.status === "ended" || found.status === "failed") {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "session is terminal",
+        });
+      }
+
+      const senderType = req.body?.senderType;
+      const messageType = req.body?.messageType;
+      const payload = req.body?.payload;
+
+      if (senderType !== "controller" && senderType !== "host") {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "senderType must be controller or host",
+        });
+      }
+
+      if (!messageType || !SIGNAL_MESSAGE_TYPES.includes(messageType)) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "messageType is invalid",
+        });
+      }
+
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "payload must be an object",
+        });
+      }
+
+      const message = signalStore.append({
+        sessionId: found.id,
+        tenantId: found.tenantId,
+        senderType,
+        messageType,
+        payload,
+      });
+
+      signalWsHub.publish(message);
+
+      return reply.code(201).send({
+        item: message,
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/sessions/:id/signal",
+    async (
+      req: FastifyRequest<{ Params: SignalParams; Querystring: SignalQuery }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      const afterSeqRaw = req.query.afterSeq;
+      const parsed = Number(afterSeqRaw);
+      const afterSeq = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+
+      return reply.code(200).send({
+        items: signalStore.list(found.id, afterSeq),
       });
     },
   );
