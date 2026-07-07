@@ -304,6 +304,7 @@ export function SessionsPanel() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "x-participant-type": "controller",
           },
           body: JSON.stringify({
             senderType: "controller",

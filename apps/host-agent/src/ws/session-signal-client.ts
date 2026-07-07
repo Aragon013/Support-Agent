@@ -265,6 +265,7 @@ export class SessionSignalClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "x-participant-type": "host",
         },
         body: JSON.stringify({
           senderType: "host",
