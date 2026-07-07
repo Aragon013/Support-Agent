@@ -84,6 +84,7 @@ function isSignalDirectionAllowed(
     messageType === "signal.ice-candidate" ||
     messageType === "clipboard.sync" ||
     messageType === "screen.frame.stub" ||
+    messageType === "screen.frame.data" ||
     messageType === "control.input"
   );
 }
@@ -110,7 +111,7 @@ function isSignalStateAllowed(
     );
   }
 
-  if (messageType !== "screen.frame.stub") {
+  if (messageType !== "screen.frame.stub" && messageType !== "screen.frame.data") {
     return true;
   }
 
@@ -501,6 +502,29 @@ export function registerSessionRoutesWithDeps(
         return reply.code(422).send({
           code: "validation_error",
           message: "payload must be an object",
+        });
+      }
+
+      if (
+        (messageType === "screen.frame.stub" || messageType === "screen.frame.data") &&
+        !found.requestedCapabilities.includes("screen")
+      ) {
+        auditStore.append({
+          tenantId: found.tenantId,
+          endpointId: found.endpointId,
+          operatorId: found.operatorId,
+          code: "session.signal.policy_denied",
+          details: {
+            sessionId: found.id,
+            senderType,
+            messageType,
+            reason: "screen_capability_missing",
+            status: found.status,
+          },
+        });
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: "screen_capability_missing",
         });
       }
 

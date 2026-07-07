@@ -20,12 +20,14 @@ const commandClient = new AgentWsClient(
 );
 
 const allowRemoteInput = process.env.ALLOW_REMOTE_INPUT === "true";
+const allowScreenCapture = process.env.ALLOW_SCREEN_CAPTURE === "true";
 
 const signalClient = new SessionSignalClient({
   controlPlaneUrl: config.controlPlaneUrl,
   tenantId: config.tenantId,
   endpointId: config.endpointId,
   allowRemoteInput,
+  allowScreenCapture,
   reconnectBaseMs: 1_000,
   reconnectMaxMs: 30_000,
 });
@@ -77,6 +79,7 @@ process.on("SIGINT", () => {
 
 console.log(`[agent] session auto-approve: ${config.autoApproveSessions}`);
 console.log(`[agent] remote input enabled: ${allowRemoteInput}`);
+console.log(`[agent] screen capture enabled: ${allowScreenCapture}`);
 
 console.log(
   `[agent] starting — control-plane: ${config.controlPlaneUrl} tenant: ${config.tenantId} endpoint: ${config.endpointId}`,

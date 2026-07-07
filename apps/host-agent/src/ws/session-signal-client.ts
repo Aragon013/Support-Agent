@@ -1,11 +1,19 @@
 import { WebSocket } from "ws";
 import { handleRemoteInput } from "../input/input-executor.js";
+import { createFrameCapturer } from "../screen/frame-capturer.js";
+import { ScreenFrameProducer } from "../screen/screen-frame-producer.js";
+import type {
+  ScreenFrameDataPayload,
+  ScreenFrameProducerConfig,
+} from "../screen/screen-frame.types.js";
 
 export type SessionSignalClientConfig = {
   controlPlaneUrl: string;
   tenantId: string;
   endpointId: string;
   allowRemoteInput: boolean;
+  allowScreenCapture?: boolean;
+  screenFrameConfig?: ScreenFrameProducerConfig;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
 };
@@ -40,7 +48,8 @@ type SignalMessage = {
     | "signal.ice-candidate"
     | "control.input"
     | "clipboard.sync"
-    | "screen.frame.stub";
+    | "screen.frame.stub"
+    | "screen.frame.data";
   payload: Record<string, unknown>;
 };
 
@@ -153,12 +162,20 @@ export class SessionSignalClient {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly reconnectDelays = new Map<string, number>();
   private readonly sessionCache = new Map<string, SessionRecord>();
+  private readonly frameProducer: ScreenFrameProducer;
   private stopping = false;
 
   constructor(
     private readonly cfg: SessionSignalClientConfig,
     private readonly log: (msg: string) => void = console.log,
-  ) {}
+  ) {
+    this.frameProducer = new ScreenFrameProducer(
+      createFrameCapturer(),
+      (sessionId, framePayload) => this.postScreenFrame(sessionId, framePayload),
+      cfg.screenFrameConfig,
+      log,
+    );
+  }
 
   startSession(sessionId: string): void {
     if (this.stopping || this.sockets.has(sessionId)) {
@@ -176,6 +193,7 @@ export class SessionSignalClient {
 
     this.sockets.delete(sessionId);
     this.sessionCache.delete(sessionId);
+    this.frameProducer.stopSession(sessionId);
     ws.close();
   }
 
@@ -195,6 +213,7 @@ export class SessionSignalClient {
 
   stop(): void {
     this.stopping = true;
+    this.frameProducer.stopAll();
     for (const ws of this.sockets.values()) {
       ws.close();
     }
@@ -219,6 +238,13 @@ export class SessionSignalClient {
     }
 
     this.sessionCache.set(sessionId, session);
+
+    if (
+      this.cfg.allowScreenCapture &&
+      session.requestedCapabilities.includes("screen")
+    ) {
+      this.frameProducer.startSession(sessionId);
+    }
 
     const wsUrl = buildSessionSignalWsUrl(this.cfg, sessionId, 0);
     this.log(`[agent/signal] connecting to ${wsUrl}`);
@@ -358,6 +384,38 @@ export class SessionSignalClient {
     } catch (e) {
       this.log(
         `[agent/signal] error posting control.input result for ${session.id}: ${String(e)}`,
+      );
+    }
+  }
+
+  private async postScreenFrame(
+    sessionId: string,
+    framePayload: ScreenFrameDataPayload,
+  ): Promise<void> {
+    const base = this.cfg.controlPlaneUrl.replace(/\/$/, "");
+
+    try {
+      const response = await fetch(`${base}/api/v1/sessions/${sessionId}/signal`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-participant-type": "host",
+        },
+        body: JSON.stringify({
+          senderType: "host",
+          messageType: "screen.frame.data",
+          payload: framePayload,
+        }),
+      });
+
+      if (!response.ok) {
+        this.log(
+          `[agent/signal] failed to post screen frame for ${sessionId}: ${response.status}`,
+        );
+      }
+    } catch (e) {
+      this.log(
+        `[agent/signal] error posting screen frame for ${sessionId}: ${String(e)}`,
       );
     }
   }
