@@ -505,4 +505,70 @@ describe("command routes policy integration", () => {
 
     await app.close();
   });
+
+  it("accepts host run report with chunk stream and digest metadata", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/commands/jobs",
+      payload: {
+        tenantId: "tenant-report",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        catalogCommandId: "diagnostic.system.info",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json();
+
+    const report = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/commands/jobs/${created.id}/report`,
+      payload: {
+        status: "completed",
+        output: {
+          stdout: ["line one", "line two"],
+          stderr: ["warn one"],
+          exitCode: 0,
+        },
+        digestSha256: "abc123",
+        outputBytes: 24,
+        truncated: false,
+      },
+    });
+
+    expect(report.statusCode).toBe(200);
+    const reportBody = report.json();
+    expect(reportBody.status).toBe("completed");
+
+    const channel = await app.inject({
+      method: "GET",
+      url: `/api/v1/commands/jobs/${created.id}/channel-messages`,
+    });
+    expect(channel.statusCode).toBe(200);
+    const channelBody = channel.json();
+    const stdoutChunks = channelBody.items.filter(
+      (x: { kind: string }) => x.kind === "command.stdout",
+    );
+    const stderrChunks = channelBody.items.filter(
+      (x: { kind: string }) => x.kind === "command.stderr",
+    );
+    expect(stdoutChunks.length).toBe(2);
+    expect(stderrChunks.length).toBe(1);
+
+    const audit = await app.inject({
+      method: "GET",
+      url: `/api/v1/commands/jobs/${created.id}/audit`,
+    });
+    expect(audit.statusCode).toBe(200);
+    const auditBody = audit.json();
+    const completed = auditBody.items.find(
+      (x: { code: string }) => x.code === "command.job.completed",
+    );
+    expect(completed?.details?.digestSha256).toBe("abc123");
+    expect(completed?.details?.outputBytes).toBe(24);
+
+    await app.close();
+  });
 });

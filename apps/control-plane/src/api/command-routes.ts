@@ -64,6 +64,19 @@ type RunJobBody = {
   failReason?: string;
 };
 
+type ReportJobBody = {
+  status?: "completed" | "failed" | "cancelled";
+  failReason?: string;
+  output?: {
+    stdout?: string[];
+    stderr?: string[];
+    exitCode?: number;
+  };
+  digestSha256?: string;
+  outputBytes?: number;
+  truncated?: boolean;
+};
+
 const RETENTION_DAYS_DEFAULT = 90;
 const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const PRESERVE_AUDIT_CODES = [
@@ -636,6 +649,182 @@ export function registerCommandRoutes(app: FastifyInstance): void {
       return {
         id: updated.id,
         status: updated.status,
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/internal/commands/jobs/:id/report",
+    async (
+      req: FastifyRequest<{ Params: IdParams; Body: ReportJobBody }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      if (found.status !== "queued") {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "run report is only allowed from queued",
+        });
+      }
+
+      const requestedStatus = req.body?.status;
+      if (
+        requestedStatus !== "completed" &&
+        requestedStatus !== "failed" &&
+        requestedStatus !== "cancelled"
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "status must be one of completed | failed | cancelled",
+        });
+      }
+
+      const failReason =
+        isNonEmptyString(req.body?.failReason) ? req.body.failReason : "runner_error";
+
+      const stdout = Array.isArray(req.body?.output?.stdout)
+        ? req.body.output.stdout.filter((x): x is string => typeof x === "string")
+        : [];
+      const stderr = Array.isArray(req.body?.output?.stderr)
+        ? req.body.output.stderr.filter((x): x is string => typeof x === "string")
+        : [];
+      const exitCode =
+        typeof req.body?.output?.exitCode === "number" && Number.isFinite(req.body.output.exitCode)
+          ? Math.trunc(req.body.output.exitCode)
+          : requestedStatus === "completed"
+            ? 0
+            : 1;
+
+      let current = found;
+      const advance = (
+        target: CommandJobStatus,
+        reason?: string,
+        extraDetails?: Record<string, unknown>,
+      ) => {
+        const transition = assertTransition(current.status, target);
+        if (!transition.ok) {
+          return undefined;
+        }
+
+        const updated = store.updateStatus(current.id, target);
+        if (!updated) {
+          return undefined;
+        }
+
+        current = updated;
+        emitLifecycle(updated, reason, extraDetails);
+        return updated;
+      };
+
+      if (!advance("dispatched", undefined, { progressPercent: 0 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot dispatch command job",
+        });
+      }
+
+      if (!advance("running", undefined, { progressPercent: 10 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot mark command job as running",
+        });
+      }
+
+      const hasChunks = stdout.length > 0 || stderr.length > 0;
+      if (hasChunks) {
+        if (!advance("streaming", undefined, { progressPercent: 60 })) {
+          return reply.code(409).send({
+            code: "invalid_state_transition",
+            message: "cannot mark command job as streaming",
+          });
+        }
+
+        for (const chunk of stdout) {
+          eventBus.emitStdout(current, chunk);
+        }
+        for (const chunk of stderr) {
+          eventBus.emitStderr(current, chunk);
+        }
+      }
+
+      const meta = {
+        progressPercent: 100,
+        digestSha256: req.body?.digestSha256,
+        outputBytes: req.body?.outputBytes,
+        truncated: req.body?.truncated,
+      };
+
+      if (requestedStatus === "cancelled") {
+        if (!advance("cancelled", failReason, meta)) {
+          return reply.code(409).send({
+            code: "invalid_state_transition",
+            message: "cannot cancel command job",
+          });
+        }
+
+        eventBus.emitExit(current, exitCode);
+        eventBus.emitAbort(current, failReason);
+
+        return {
+          id: current.id,
+          status: current.status,
+          outcome: requestedStatus,
+          exitCode,
+        };
+      }
+
+      if (requestedStatus === "failed") {
+        if (!advance("failed", failReason, meta)) {
+          return reply.code(409).send({
+            code: "invalid_state_transition",
+            message: "cannot fail command job",
+          });
+        }
+
+        eventBus.emitExit(current, exitCode);
+        eventBus.emitAbort(current, failReason);
+
+        return {
+          id: current.id,
+          status: current.status,
+          outcome: requestedStatus,
+          exitCode,
+        };
+      }
+
+      if (!advance("verifying", undefined, {
+        progressPercent: 90,
+        digestSha256: req.body?.digestSha256,
+        outputBytes: req.body?.outputBytes,
+        truncated: req.body?.truncated,
+      })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot mark command job as verifying",
+        });
+      }
+
+      if (!advance("completed", undefined, meta)) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot complete command job",
+        });
+      }
+
+      eventBus.emitExit(current, exitCode);
+
+      return {
+        id: current.id,
+        status: current.status,
+        outcome: requestedStatus,
+        exitCode,
       };
     },
   );

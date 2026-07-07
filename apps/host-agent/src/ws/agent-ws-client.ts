@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { createHash } from "node:crypto";
 import type { CommandInitEnvelope } from "../types.js";
 import type { CommandDispatcher } from "../dispatcher/command-dispatcher.js";
 
@@ -146,14 +147,13 @@ export class AgentWsClient {
 
     const outcome = await this.dispatcher.dispatch(envelope);
 
+    const reportBody = toRunReportBody(outcome);
+
     try {
-      await fetch(`${base}/api/v1/internal/commands/jobs/${jobId}/run`, {
+      await fetch(`${base}/api/v1/internal/commands/jobs/${jobId}/report`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          outcome: outcome.status === "completed" ? "completed" : "failed",
-          failReason: "reason" in outcome ? outcome.reason : undefined,
-        }),
+        body: JSON.stringify(reportBody),
       });
     } catch (e) {
       this.log(`[agent] failed to report outcome for ${jobId}: ${String(e)}`);
@@ -171,4 +171,71 @@ function buildWsUrl(cfg: AgentClientConfig): string {
   const params = new URLSearchParams({ tenantId: cfg.tenantId });
   if (cfg.endpointId) params.set("endpointId", cfg.endpointId);
   return `${base}/api/v1/commands/events/ws?${params.toString()}`;
+}
+
+function toRunReportBody(outcome: Awaited<ReturnType<CommandDispatcher["dispatch"]>>): {
+  status: "completed" | "failed" | "cancelled";
+  failReason?: string;
+  output?: {
+    stdout: string[];
+    stderr: string[];
+    exitCode: number;
+  };
+  digestSha256?: string;
+  outputBytes?: number;
+  truncated?: boolean;
+} {
+  if (outcome.status === "completed" || outcome.status === "failed") {
+    const digest = digestOutput(outcome.output.stdout, outcome.output.stderr);
+    const truncated =
+      outcome.output.stdout.some((x) => x.includes("[output truncated: cap exceeded]")) ||
+      outcome.output.stderr.some((x) => x.includes("[output truncated: cap exceeded]"));
+
+    return {
+      status: outcome.status,
+      ...(outcome.status === "failed" ? { failReason: outcome.reason } : {}),
+      output: {
+        stdout: outcome.output.stdout,
+        stderr: outcome.output.stderr,
+        exitCode: outcome.output.exitCode,
+      },
+      digestSha256: digest.sha256,
+      outputBytes: digest.bytes,
+      truncated,
+    };
+  }
+
+  if (outcome.status === "cancelled") {
+    return {
+      status: "cancelled",
+      failReason: outcome.reason,
+    };
+  }
+
+  return {
+    status: "failed",
+    failReason: "unknown_command",
+  };
+}
+
+function digestOutput(stdout: string[], stderr: string[]): { sha256: string; bytes: number } {
+  const hash = createHash("sha256");
+  let bytes = 0;
+
+  for (const line of stdout) {
+    const payload = `stdout:${line}\n`;
+    hash.update(payload);
+    bytes += Buffer.byteLength(line, "utf8");
+  }
+
+  for (const line of stderr) {
+    const payload = `stderr:${line}\n`;
+    hash.update(payload);
+    bytes += Buffer.byteLength(line, "utf8");
+  }
+
+  return {
+    sha256: hash.digest("hex"),
+    bytes,
+  };
 }
