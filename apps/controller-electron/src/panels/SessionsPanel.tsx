@@ -53,6 +53,29 @@ type SessionSignalMessage = {
   createdAt: string;
 };
 
+type ControlInputAckPayload = {
+  result?: "accepted" | "denied";
+  action?: string;
+  sessionStatus?: SessionStatus;
+  handledAt?: string;
+  denyCode?: string;
+};
+
+function asControlInputAck(
+  msg: SessionSignalMessage | undefined,
+): ControlInputAckPayload | null {
+  if (!msg || msg.senderType !== "host" || msg.messageType !== "control.input") {
+    return null;
+  }
+
+  const payload = msg.payload;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  return payload as ControlInputAckPayload;
+}
+
 const STATUS_COLOR: Record<SessionStatus, string> = {
   requested: "text-slate-300",
   pending_host: "text-slate-300",
@@ -90,6 +113,20 @@ export function SessionsPanel() {
     () => sessions.find((s) => s.sessionId === selectedId) ?? null,
     [sessions, selectedId],
   );
+
+  const latestHostInputAck = useMemo(() => {
+    for (const msg of signalMessages) {
+      const parsed = asControlInputAck(msg);
+      if (parsed) {
+        return {
+          message: msg,
+          payload: parsed,
+        };
+      }
+    }
+
+    return null;
+  }, [signalMessages]);
 
   useEffect(() => {
     const ws = new WebSocket(
@@ -287,6 +324,39 @@ export function SessionsPanel() {
     }
   };
 
+  const transitionSelected = async (status: "connected_p2p" | "connected_relay") => {
+    if (!selected) {
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `http://localhost:3000/api/v1/internal/sessions/${selected.sessionId}/state`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            status,
+            routeMode: status === "connected_relay" ? "relay" : "direct",
+          }),
+        },
+      );
+
+      if (!res.ok) {
+        const body = await res.json() as { code?: string; message?: string };
+        throw new Error(body.message ?? body.code ?? `http_${res.status}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const sendSignal = async (
     messageType: SessionSignalMessageType,
     payload: Record<string, unknown>,
@@ -407,6 +477,20 @@ export function SessionsPanel() {
           <Square className="w-4 h-4" />
           End Selected
         </button>
+        <button
+          onClick={() => transitionSelected("connected_p2p")}
+          disabled={busy || !selected || !isActiveSession}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-success/15 border border-success/30 text-success text-sm font-semibold disabled:opacity-50"
+        >
+          Mark P2P Connected
+        </button>
+        <button
+          onClick={() => transitionSelected("connected_relay")}
+          disabled={busy || !selected || !isActiveSession}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent/15 border border-accent/30 text-accent text-sm font-semibold disabled:opacity-50"
+        >
+          Mark Relay Connected
+        </button>
       </div>
 
       {error && (
@@ -485,6 +569,45 @@ export function SessionsPanel() {
             {signalError}
           </div>
         )}
+
+        <div className="rounded-lg border border-surface-800 bg-surface-950/60 px-3 py-3 mb-3">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <p className="text-xs font-semibold text-white">Latest Host Input Ack</p>
+            <p className="text-[11px] text-slate-500">
+              {latestHostInputAck?.message.createdAt ?? "waiting"}
+            </p>
+          </div>
+
+          {latestHostInputAck ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-slate-500">Result:</span>{" "}
+                <span className={cn(
+                  "font-semibold",
+                  latestHostInputAck.payload.result === "accepted" ? "text-success" : "text-danger",
+                )}>
+                  {latestHostInputAck.payload.result ?? "unknown"}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">Action:</span>{" "}
+                <span className="text-white">{latestHostInputAck.payload.action ?? "n/a"}</span>
+              </div>
+              <div>
+                <span className="text-slate-500">Session status:</span>{" "}
+                <span className="text-white">{latestHostInputAck.payload.sessionStatus ?? "n/a"}</span>
+              </div>
+              <div>
+                <span className="text-slate-500">Deny code:</span>{" "}
+                <span className="text-white">{latestHostInputAck.payload.denyCode ?? "none"}</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">
+              No host acknowledgement received for control.input yet.
+            </p>
+          )}
+        </div>
 
         {signalMessages.length === 0 ? (
           <div className="text-xs text-slate-500 py-4 text-center border border-dashed border-surface-700 rounded-lg">
