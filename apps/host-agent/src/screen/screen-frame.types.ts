@@ -4,6 +4,14 @@
 
 export type FrameEncodingQuality = 0 | 10 | 20 | 30 | 40 | 50 | 60 | 70 | 80 | 90 | 100;
 
+export interface ScreenFrameFeedbackPayload {
+  targetFps?: number;
+  targetQuality?: number;
+  maxInFlight?: number;
+  measuredRttMs?: number;
+  reason?: string;
+}
+
 /**
  * Payload sent from host to controller via screen.frame.data message.
  * The JPEG data is base64-encoded for JSON transport.
@@ -47,6 +55,21 @@ export interface ScreenFrameProducerConfig {
 
   // Enable detailed timing logs for debugging
   debugTiming: boolean;
+
+  // Lower bound for dynamic interval adaptation.
+  minIntervalMs?: number;
+
+  // Upper bound for dynamic interval adaptation.
+  maxIntervalMs?: number;
+
+  // Lower bound for dynamic quality adaptation.
+  minEncodingQuality?: FrameEncodingQuality;
+
+  // Upper bound for dynamic quality adaptation.
+  maxEncodingQuality?: FrameEncodingQuality;
+
+  // Enable automatic adaptation based on send/capture latency.
+  adaptiveEnabled?: boolean;
 }
 
 /**
@@ -58,6 +81,11 @@ export const DEFAULT_SCREEN_FRAME_CONFIG: ScreenFrameProducerConfig = {
   maxWidth: 1920,
   maxHeight: 1080,
   debugTiming: false,
+  minIntervalMs: 120,
+  maxIntervalMs: 2000,
+  minEncodingQuality: 30,
+  maxEncodingQuality: 90,
+  adaptiveEnabled: true,
 };
 
 /**

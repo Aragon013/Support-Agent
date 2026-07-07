@@ -2,6 +2,10 @@ import type { RiskLevel } from "./command-job.js";
 
 export type OperatorRole = "viewer" | "tech" | "admin";
 export type EndpointLicenseStatus = "active" | "inactive";
+export type EndpointInstallProfile =
+  | "remote_only"
+  | "support_limited_no_folders"
+  | "support_full";
 
 export type CommandPolicyConfig = {
   allowRemoteCommand: boolean;
@@ -18,6 +22,7 @@ export type CommandPolicyInput = {
   riskLevel: RiskLevel;
   operatorRole: OperatorRole;
   endpointLicenseStatus: EndpointLicenseStatus;
+  endpointInstallProfile: EndpointInstallProfile;
   activeCommandCountForEndpoint: number;
   mfaVerified: boolean;
 };
@@ -25,6 +30,7 @@ export type CommandPolicyInput = {
 export type PolicyDecisionReason =
   | "allowed"
   | "license_inactive"
+  | "install_profile_remote_only"
   | "remote_command_disabled"
   | "command_not_allowlisted"
   | "command_blocked"
@@ -69,6 +75,10 @@ export function evaluateCommandPolicy(
 ): CommandPolicyDecision {
   if (input.endpointLicenseStatus !== "active") {
     return { decision: "deny", reason: "license_inactive" };
+  }
+
+  if (input.endpointInstallProfile === "remote_only") {
+    return { decision: "deny", reason: "install_profile_remote_only" };
   }
 
   if (!policy.allowRemoteCommand) {

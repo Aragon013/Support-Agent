@@ -47,20 +47,20 @@ export function MonitorPanel() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <div className="flex flex-col gap-4 p-6 text-slate-900">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-white">Live Monitor</h2>
-          <p className="text-sm text-slate-400 mt-0.5">Real-time WS event stream</p>
+          <h2 className="text-lg font-semibold text-slate-900">Live Activity</h2>
+          <p className="mt-0.5 text-sm text-slate-600">See incoming events in real time.</p>
         </div>
-        <div className={cn("flex items-center gap-1.5 text-xs font-medium", connected ? "text-success" : "text-slate-500")}>
+        <div className={cn("flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium", connected ? "border-success/40 bg-success/10 text-success" : "border-slate-200 bg-slate-50 text-slate-500")}>
           {connected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
           {connected ? "Connected" : "Disconnected"}
         </div>
       </div>
 
       {events.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-slate-600">
+        <div className="tv-empty flex flex-col items-center justify-center py-20">
           <Activity className="w-10 h-10 mb-3 animate-pulse-slow" />
           <p className="text-sm">Waiting for events…</p>
         </div>
@@ -72,7 +72,7 @@ export function MonitorPanel() {
                 key={`${ev.jobId}-${ev.seq}`}
                 initial={{ opacity: 0, x: 12 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="flex items-center gap-3 px-3 py-2 bg-surface-900 border border-surface-800 rounded-lg text-sm"
+                className="tv-card flex items-center gap-3 px-3 py-2 text-sm"
               >
                 <span className="text-slate-600 font-mono text-xs w-6 shrink-0">{ev.seq}</span>
                 <span className="text-accent font-mono text-xs flex-1 truncate">{ev.name}</span>

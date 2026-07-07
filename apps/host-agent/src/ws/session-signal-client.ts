@@ -4,6 +4,7 @@ import { createFrameCapturer } from "../screen/frame-capturer.js";
 import { ScreenFrameProducer } from "../screen/screen-frame-producer.js";
 import type {
   ScreenFrameDataPayload,
+  ScreenFrameFeedbackPayload,
   ScreenFrameProducerConfig,
 } from "../screen/screen-frame.types.js";
 
@@ -49,7 +50,8 @@ type SignalMessage = {
     | "control.input"
     | "clipboard.sync"
     | "screen.frame.stub"
-    | "screen.frame.data";
+    | "screen.frame.data"
+    | "screen.frame.feedback";
   payload: Record<string, unknown>;
 };
 
@@ -156,6 +158,43 @@ export function buildControlInputResultPayload(input: {
 
 function isControlInputPayload(payload: Record<string, unknown>): boolean {
   return typeof payload.action === "string" && payload.action.trim().length > 0;
+}
+
+export function parseScreenFrameFeedback(
+  payload: Record<string, unknown>,
+): ScreenFrameFeedbackPayload | null {
+  const feedback: ScreenFrameFeedbackPayload = {};
+
+  if (typeof payload.targetFps === "number" && Number.isFinite(payload.targetFps)) {
+    feedback.targetFps = Math.max(1, Math.min(30, payload.targetFps));
+  }
+
+  if (typeof payload.targetQuality === "number" && Number.isFinite(payload.targetQuality)) {
+    feedback.targetQuality = Math.max(10, Math.min(100, Math.round(payload.targetQuality / 10) * 10));
+  }
+
+  if (typeof payload.maxInFlight === "number" && Number.isFinite(payload.maxInFlight)) {
+    feedback.maxInFlight = Math.max(1, Math.min(2, Math.floor(payload.maxInFlight)));
+  }
+
+  if (typeof payload.measuredRttMs === "number" && Number.isFinite(payload.measuredRttMs)) {
+    feedback.measuredRttMs = Math.max(0, payload.measuredRttMs);
+  }
+
+  if (typeof payload.reason === "string" && payload.reason.trim().length > 0) {
+    feedback.reason = payload.reason;
+  }
+
+  if (
+    feedback.targetFps === undefined &&
+    feedback.targetQuality === undefined &&
+    feedback.maxInFlight === undefined &&
+    feedback.measuredRttMs === undefined
+  ) {
+    return null;
+  }
+
+  return feedback;
 }
 
 export class SessionSignalClient {
@@ -305,6 +344,21 @@ export class SessionSignalClient {
     }
 
     if (msg.senderType !== "controller") {
+      return;
+    }
+
+    if (msg.messageType === "screen.frame.feedback") {
+      if (!this.cfg.allowScreenCapture || !session.requestedCapabilities.includes("screen")) {
+        return;
+      }
+
+      const feedback = parseScreenFrameFeedback(msg.payload);
+      if (!feedback) {
+        this.log(`[agent/signal] ignored invalid screen.frame.feedback for ${sessionId}`);
+        return;
+      }
+
+      this.frameProducer.updateSessionTarget(sessionId, feedback);
       return;
     }
 

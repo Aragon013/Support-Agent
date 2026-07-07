@@ -60,11 +60,11 @@ export function CommandPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-5 p-6 max-w-2xl">
+    <div className="flex max-w-3xl flex-col gap-5 p-6 text-slate-900">
       <div>
-        <h2 className="text-lg font-semibold text-white">Dispatch Command</h2>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Select a command from the catalog and execute it on the target endpoint.
+        <h2 className="text-lg font-semibold text-slate-900">Run Command</h2>
+        <p className="mt-0.5 text-sm text-slate-600">
+          Choose a command and run it on the selected device.
         </p>
       </div>
 
@@ -75,10 +75,10 @@ export function CommandPanel() {
             key={cmd.id}
             onClick={() => { setSelected(cmd.id); setParams({}); setResult(null); setError(null); }}
             className={cn(
-              "flex items-center justify-between px-4 py-3 rounded-xl border text-left transition-all",
+              "flex items-center justify-between rounded-xl border px-4 py-3 text-left shadow-sm transition-all",
               selected === cmd.id
-                ? "bg-brand/10 border-brand/50 text-white"
-                : "bg-surface-900 border-surface-700 text-slate-400 hover:border-surface-500 hover:text-white",
+                ? "border-brand/50 bg-brand/10 text-slate-900"
+                : "border-blue-100 bg-white text-slate-600 hover:border-brand/30 hover:text-slate-900",
             )}
           >
             <span className="text-sm font-medium">{cmd.label}</span>
@@ -112,25 +112,25 @@ export function CommandPanel() {
                     <select
                       value={params[p.key] ?? ""}
                       onChange={(e) => setParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                      className="w-full appearance-none bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-brand pr-8"
+                      className="tv-input w-full appearance-none pr-8"
                     >
                       <option value="">Select…</option>
                       {(p as { options: readonly string[] }).options.map((o) => (
                         <option key={o} value={o}>{o}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   </div>
                 </div>
               ) : (
                 <div key={p.key}>
-                  <label className="text-xs text-slate-400 mb-1 block capitalize">{p.key}</label>
+                  <label className="mb-1 block text-xs capitalize text-slate-500">{p.key}</label>
                   <input
                     type="text"
                     placeholder={"placeholder" in p ? p.placeholder : ""}
                     value={params[p.key] ?? ""}
                     onChange={(e) => setParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                    className="w-full bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand"
+                    className="tv-input w-full"
                   />
                 </div>
               ),
@@ -141,9 +141,9 @@ export function CommandPanel() {
 
       {/* MFA warning */}
       {command.risk === "high" && (
-        <div className="flex items-center gap-2 px-4 py-3 bg-danger/10 border border-danger/30 rounded-xl text-sm text-danger">
+        <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger shadow-sm">
           <ShieldAlert className="w-4 h-4 shrink-0" />
-          This command requires MFA step-up before dispatch.
+          This command requires MFA before run.
         </div>
       )}
 
@@ -152,10 +152,10 @@ export function CommandPanel() {
         onClick={handleDispatch}
         disabled={loading}
         className={cn(
-          "flex items-center justify-center gap-2 w-full py-3 rounded-xl font-semibold text-sm transition-all",
+          "tv-button-primary w-full py-3 transition-all",
           loading
-            ? "bg-brand/40 text-white/50 cursor-not-allowed"
-            : "bg-brand hover:bg-brand-dark text-white shadow-lg shadow-brand/20",
+            ? "cursor-not-allowed bg-brand/40 text-white/50"
+            : "shadow-lg shadow-brand/20",
         )}
       >
         {loading ? (
@@ -163,7 +163,7 @@ export function CommandPanel() {
         ) : (
           <Send className="w-4 h-4" />
         )}
-        {loading ? "Dispatching…" : "Dispatch"}
+        {loading ? "Running Command..." : "Run Command"}
       </button>
 
       {/* Result */}
@@ -174,16 +174,16 @@ export function CommandPanel() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
             className={cn(
-              "rounded-xl border px-4 py-3 text-sm font-mono",
+              "rounded-xl border px-4 py-3 text-sm font-mono shadow-sm",
               result.requiresMfa
                 ? "bg-warn/10 border-warn/30 text-warn"
                 : "bg-success/10 border-success/30 text-success",
             )}
           >
             <div className="font-semibold mb-1">
-              {result.requiresMfa ? "⚠ MFA Required" : "✓ Dispatched"}
+              {result.requiresMfa ? "⚠ MFA Required" : "✓ Command Started"}
             </div>
-            <div className="text-slate-400 text-xs break-all">
+            <div className="text-xs break-all text-slate-500">
               Job ID: {result.id}<br />
               Status: {result.status}
             </div>
@@ -194,7 +194,7 @@ export function CommandPanel() {
             initial={{ opacity: 0, scale: 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            className="rounded-xl border px-4 py-3 text-sm bg-danger/10 border-danger/30 text-danger"
+            className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger shadow-sm"
           >
             ✕ {error}
           </motion.div>

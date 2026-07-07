@@ -1,5 +1,5 @@
 RemoteSupportPro - Project Context Snapshot
-Fecha: 2026-07-03
+Fecha: 2026-07-07
 
 Objetivo:
 Sistema profesional de soporte remoto tipo TeamViewer para MSP.
@@ -12,6 +12,26 @@ Decisiones cerradas:
 - Logs: debug + auditoria con retencion configurable (default 90 dias).
 - Licenciamiento por endpoint.
 - Sin GitHub Release hasta aprobacion explicita.
+
+Nueva directriz de producto (2026-07-07):
+- El Host debe definirse por perfil de permisos desde instalacion.
+- Windows: selector en instalador (remote_only | support_limited_no_folders | support_full).
+- macOS: 3 instalables separados, uno por perfil.
+- El Controller y el control-plane deben respetar ese perfil para habilitar/bloquear funciones.
+
+Estado de implementacion (2026-07-07):
+- Backend:
+	- Command policy ya deniega comandos cuando installProfile=remote_only.
+	- Session policy ya expone installProfile y creacion de sesion respeta capabilities por modo.
+- Controller Electron:
+	- Support y Sessions consumen session-policy y aplican gating automatico.
+	- Sessions ademas gatea acciones por requestedCapabilities de la sesion seleccionada.
+- Host Agent:
+	- Catalogo de runners alineado con maintenance.network.reset implementado.
+
+Riesgo abierto de seguridad (siguiente paso):
+- Fuente de installProfile aun depende de header cliente para flujos de desarrollo.
+- Para produccion, el control-plane debe resolver installProfile desde registro confiable de endpoint (inventario/DB) y no desde header libre.
 
 Modulos maestros:
 - Auth + Tenant + Roles

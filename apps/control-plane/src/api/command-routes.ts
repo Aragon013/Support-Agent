@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_COMMAND_POLICY,
   evaluateCommandPolicy,
+  type EndpointInstallProfile,
   type EndpointLicenseStatus,
   type OperatorRole,
 } from "../domain/command-policy.js";
@@ -99,6 +100,18 @@ function parseOperatorRole(value: unknown): OperatorRole {
 
 function parseEndpointLicenseStatus(value: unknown): EndpointLicenseStatus {
   return value === "inactive" ? "inactive" : "active";
+}
+
+function parseEndpointInstallProfile(value: unknown): EndpointInstallProfile {
+  if (
+    value === "remote_only" ||
+    value === "support_limited_no_folders" ||
+    value === "support_full"
+  ) {
+    return value;
+  }
+
+  return "support_full";
 }
 
 function parseActiveCommandCount(value: unknown): number {
@@ -439,6 +452,9 @@ export function registerCommandRoutesWithDeps(
         operatorRole: parseOperatorRole(req.headers["x-operator-role"]),
         endpointLicenseStatus: parseEndpointLicenseStatus(
           req.headers["x-endpoint-license-status"],
+        ),
+        endpointInstallProfile: parseEndpointInstallProfile(
+          req.headers["x-endpoint-install-profile"],
         ),
         activeCommandCountForEndpoint: parseActiveCommandCount(
           req.headers["x-active-commands"],

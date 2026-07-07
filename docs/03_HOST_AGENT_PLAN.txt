@@ -16,6 +16,39 @@ Definir un Host Agent nativo, persistente y seguro que opere en segundo plano, e
 - Logs debug/auditoria local con retencion y envio seguro.
 - Actualizacion del agente con canal firmado y rollback seguro.
 
+2.1) PERFILES DE INSTALACION Y PERMISOS (NUEVO REQUISITO)
+Objetivo:
+- Definir el alcance de capacidades del Host durante la instalacion y forzar su cumplimiento tanto en Host como en Controller.
+
+Perfiles de permisos a soportar:
+- remote_only
+  - Solo funcionalidad de remoteo (sesion remota), sin acciones de soporte sobre archivos.
+- support_limited_no_folders
+  - Soporte operativo (diagnostico/comandos permitidos), pero sin acceso a folders/filesystem.
+- support_full
+  - Soporte completo segun politicas del tenant, incluyendo capacidades de archivos cuando el modulo de file transfer este activo.
+
+Regla de enforcement:
+- El perfil elegido en instalacion debe persistirse localmente como capability policy base del endpoint.
+- El Controller debe leer ese perfil y habilitar/deshabilitar acciones y vistas en consecuencia.
+- El control-plane debe validar que las solicitudes de capability no excedan el perfil instalado.
+
+Windows (instalador unico con seleccion):
+- Durante instalacion se debe presentar selector de perfil.
+- El perfil seleccionado queda firmado/versionado en config local del agente.
+- El servicio no debe iniciar con perfil ambiguo o ausente.
+
+macOS (instalables separados):
+- Se publicaran 3 variantes de instalador:
+  - Host Remote Only
+  - Host Support Limited (No Folders)
+  - Host Support Full
+- Cada variante trae perfil fijo y no editable en wizard.
+
+Linux:
+- Mantener mismo modelo de perfil que Windows (selector en instalacion) salvo restriccion de empaquetado por distro.
+- Si no se puede selector uniforme, generar paquetes por perfil, igual que macOS.
+
 Fuera de alcance en este modulo:
 - Facturacion/licenciamiento comercial completo.
 - UI rica de operador (pertenece a Controller).
@@ -29,6 +62,7 @@ Fuera de alcance en este modulo:
 - Sesiones remotas requieren validacion de licencia por endpoint en control-plane.
 - E2E obligatorio: el agente no acepta canal remoto sin handshake valido.
 - No se publican releases sin aprobacion explicita.
+- El perfil de permisos definido en instalacion es obligatorio y actua como limite superior de capacidades remotas.
 
 4) CAPAS DEL AGENTE
 4.1 Service Core

@@ -1,21 +1,68 @@
 PROJECT STATUS SNAPSHOT
-Fecha: 2026-07-06
+Fecha: 2026-07-07
 
-Estado actual:
-- Proyecto bootstrap completado.
-- GitHub conectado y actualizado.
-- Regla de no-release definida.
-- Modulo Auth + Tenant + Roles listo como documento de diseno.
-- Modulo Session + Signaling listo como documento de diseno.
-- Modulo Host Agent listo como documento de diseno.
-- Modulo File Transfer listo como documento de diseno.
-- Modulo Command Engine listo como documento de diseno + backlog implementable.
-- Baseline implementado en control-plane: CP-01, CP-02, CP-03, CP-04, CP-05, CP-06, CP-07 (build+tests green).
+RESUMEN EJECUTIVO
+- El rediseno UX principal del cliente Electron ya esta aplicado y compilando.
+- Support y Sessions quedaron con flujo operativo mas claro, estilo visual consistente y copy simplificado.
+- Se normalizaron labels de acciones a formato verbo + objeto.
+- Textboxes de formularios arrancan vacios por defecto (sin prefill persistido en Support/Sessions/Audit).
+- Build de controller-electron en verde tras los cambios.
 
-Pendiente inmediato:
-- Implementacion del modulo Command Engine por slices (A-E) segun backlog tecnico.
+CAMBIOS IMPORTANTES RECIENTES (CLIENTE ELECTRON)
+- Soporte visual tipo TeamViewer claro/corporativo en shell y paneles.
+- Support:
+	- Franja superior de acciones rapidas (Run Probe, Start Control Session, Start View Session, Open Session List).
+	- Titulos y textos simplificados para tecnico/ingeniero.
+	- Estados visibles de job/sesion en badges.
+- Sessions:
+	- Estructura en dos columnas (workspace + lista de sesiones).
+	- Modo Switch to Advanced / Switch to Basic.
+	- Copy simplificado en secciones principales.
+- Unificacion de acciones (verbo + objeto) en Support, Sessions, Command, Jobs y Audit.
+- Textboxes sin valor inicial:
+	- Support: tenantId, operatorId, target.
+	- Sessions: tenantId, endpointId, operatorId, targetFps, targetQuality, autoIntervalMs, warnRttMs, criticalRttMs, fpsPenalty, qualityPenalty.
+	- Audit: tenantId.
+- Selects se mantienen con defaults segun diseno (no se cambiaron).
 
-Restricciones fijas:
+ARCHIVOS CLAVE TOCADOS EN ESTA FASE
+- apps/controller-electron/src/panels/SupportPanel.tsx
+- apps/controller-electron/src/panels/SessionsPanel.tsx
+- apps/controller-electron/src/panels/CommandPanel.tsx
+- apps/controller-electron/src/panels/JobsPanel.tsx
+- apps/controller-electron/src/panels/AuditPanel.tsx
+- apps/controller-electron/src/panels/MonitorPanel.tsx
+- apps/controller-electron/src/panels/SettingsPanel.tsx
+- apps/controller-electron/src/index.css
+- apps/controller-electron/src/components/TitleBar.tsx
+- apps/controller-electron/src/components/Sidebar.tsx
+- apps/controller-electron/src/App.tsx
+- apps/controller-electron/scripts/dev.mjs
+- apps/controller-electron/scripts/dev-electron.mjs
+- apps/controller-electron/electron/main.ts
+- apps/controller-electron/package.json
+
+ESTADO DE ARRANQUE DEV (WINDOWS)
+- Build: OK (renderer + electron).
+- El flujo dev ha tenido intermitencias por sincronizacion renderer/electron y por puertos ocupados.
+- Se mejoro launcher:
+	- dev.mjs ahora invoca Vite directo (evita parseo raro de args).
+	- dev-electron.mjs ampliao timeout y fallback localhost/127.0.0.1.
+- Comando recomendado de arranque:
+	npm --prefix "c:\Users\Aragonlu\RemoteSupportPro\apps\controller-electron" run dev -- --host 127.0.0.1 --port 5173
+
+RUTA DE CONTINUIDAD (SIGUIENTE CHAT)
+1) Validacion visual final con el usuario en runtime (Support y Sessions).
+2) Ajustes finos de copy de estados y mensajes de error para tono 100% operativo.
+3) Si UX queda cerrada, volver al pendiente de seguridad backend:
+	 - Resolver installProfile desde endpoint registry en control-plane.
+	 - Tratar header de install profile solo como hint en dev.
+
+PENDIENTES ABIERTOS
+- Validar en vivo que no queden textos largos o tecnicos en rutas secundarias.
+- Confirmar estabilidad total del flujo dev en la maquina del usuario (sin cierres inesperados).
+
+RESTRICCIONES FIJAS DEL PROYECTO
 - E2E obligatorio.
 - MFA obligatorio.
 - Logs con retencion configurable (default 90 dias).
@@ -23,5 +70,7 @@ Restricciones fijas:
 - Host agent nativo.
 - Controller con Electron.
 
-Siguiente accion unica:
-- Ejecutar A-04 y D-01 (eventos WS/DataChannel + auditoria de ciclo completo).
+NOTA PARA RETOMA RAPIDA
+- No tocar selects por pedido del usuario.
+- Mantener lenguaje corto, accionable y no academico.
+- Priorizar experiencia de tecnico/ingeniero en operacion real.

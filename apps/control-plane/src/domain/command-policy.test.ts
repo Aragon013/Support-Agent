@@ -20,6 +20,7 @@ describe("evaluateCommandPolicy", () => {
       riskLevel: "low",
       operatorRole: "admin",
       endpointLicenseStatus: "inactive",
+      endpointInstallProfile: "support_full",
       activeCommandCountForEndpoint: 0,
       mfaVerified: false,
     });
@@ -33,11 +34,29 @@ describe("evaluateCommandPolicy", () => {
       riskLevel: "high",
       operatorRole: "tech",
       endpointLicenseStatus: "active",
+      endpointInstallProfile: "support_full",
       activeCommandCountForEndpoint: 0,
       mfaVerified: false,
     });
 
     expect(result).toEqual({ decision: "deny", reason: "role_insufficient" });
+  });
+
+  it("denies when endpoint install profile is remote_only", () => {
+    const result = evaluateCommandPolicy(DEFAULT_COMMAND_POLICY, {
+      commandId: "diagnostic.system.info",
+      riskLevel: "low",
+      operatorRole: "admin",
+      endpointLicenseStatus: "active",
+      endpointInstallProfile: "remote_only",
+      activeCommandCountForEndpoint: 0,
+      mfaVerified: false,
+    });
+
+    expect(result).toEqual({
+      decision: "deny",
+      reason: "install_profile_remote_only",
+    });
   });
 
   it("returns stepup when MFA is required but not verified", () => {
@@ -55,6 +74,7 @@ describe("evaluateCommandPolicy", () => {
       riskLevel: "high",
       operatorRole: "tech",
       endpointLicenseStatus: "active",
+      endpointInstallProfile: "support_full",
       activeCommandCountForEndpoint: 0,
       mfaVerified: false,
     });
@@ -77,6 +97,7 @@ describe("evaluateCommandPolicy", () => {
       riskLevel: "high",
       operatorRole: "tech",
       endpointLicenseStatus: "active",
+      endpointInstallProfile: "support_full",
       activeCommandCountForEndpoint: 0,
       mfaVerified: true,
     });
@@ -90,6 +111,7 @@ describe("evaluateCommandPolicy", () => {
       riskLevel: "low",
       operatorRole: "admin",
       endpointLicenseStatus: "active",
+      endpointInstallProfile: "support_full",
       activeCommandCountForEndpoint: 2,
       mfaVerified: false,
     });

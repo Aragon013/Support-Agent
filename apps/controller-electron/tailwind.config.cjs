@@ -6,28 +6,28 @@ module.exports = {
     extend: {
       colors: {
         brand: {
-          DEFAULT: "#2563eb",
-          dark: "#1d4ed8",
+          DEFAULT: "#0b84ff",
+          dark: "#0068d6",
         },
         surface: {
           50:  "#f8fafc",
           100: "#f1f5f9",
           200: "#e2e8f0",
-          700: "#334155",
-          800: "#1e293b",
-          900: "#0f172a",
-          950: "#090d17",
+          700: "#2f4460",
+          800: "#1b2d44",
+          900: "#102238",
+          950: "#091a2d",
         },
         accent: {
-          DEFAULT: "#38bdf8",
-          muted: "#0ea5e9",
+          DEFAULT: "#4cc6ff",
+          muted: "#2399e3",
         },
         danger: "#ef4444",
         success: "#22c55e",
         warn: "#f59e0b",
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["Manrope", "Segoe UI", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       borderRadius: {

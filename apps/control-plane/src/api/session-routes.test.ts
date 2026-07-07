@@ -3,6 +3,27 @@ import { describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 
 describe("session routes", () => {
+  it("returns install profile capabilities in endpoint policy", async () => {
+    const app = buildApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/endpoints/endpoint-1/session-policy",
+      headers: {
+        "x-endpoint-unattended": "true",
+        "x-endpoint-install-profile": "remote_only",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.installProfile).toBe("remote_only");
+    expect(body.supportCommandsAllowed).toBe(false);
+    expect(body.folderActionsAllowed).toBe(false);
+
+    await app.close();
+  });
+
   it("blocks viewer role from creating sessions", async () => {
     const app = buildApp();
 
@@ -22,6 +43,42 @@ describe("session routes", () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.json().reason).toBe("role_insufficient");
+
+    await app.close();
+  });
+
+  it("normalizes view-mode capabilities by removing input", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-install-profile": "support_full",
+      },
+      payload: {
+        tenantId: "tenant-1",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        accessMode: "view",
+        requestedCapabilities: ["screen", "input", "clipboard"],
+      },
+    });
+
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json();
+    expect(createBody.installProfile).toBe("support_full");
+    expect(createBody.requestedCapabilities).toEqual(["screen", "clipboard"]);
+
+    const read = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${createBody.sessionId}`,
+    });
+
+    expect(read.statusCode).toBe(200);
+    expect(read.json().requestedCapabilities).toEqual(["screen", "clipboard"]);
 
     await app.close();
   });
@@ -427,6 +484,48 @@ describe("session routes", () => {
     await app.close();
   });
 
+  it("rejects screen frame feedback until session is connected", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const signal = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      headers: {
+        "x-participant-type": "controller",
+      },
+      payload: {
+        senderType: "controller",
+        messageType: "screen.frame.feedback",
+        payload: {
+          targetFps: 12,
+          targetQuality: 60,
+        },
+      },
+    });
+
+    expect(signal.statusCode).toBe(403);
+    expect(signal.json().reason).toBe("message_state_invalid");
+
+    await app.close();
+  });
+
   it("accepts control input after session transitions to connected_p2p", async () => {
     const app = buildApp();
 
@@ -481,6 +580,61 @@ describe("session routes", () => {
 
     expect(signal.statusCode).toBe(201);
     expect(signal.json().item.messageType).toBe("control.input");
+
+    await app.close();
+  });
+
+  it("accepts screen frame feedback after session transitions to connected_p2p", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        accessMode: "control",
+        requestedCapabilities: ["screen", "input", "clipboard"],
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const transition = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/sessions/${sessionId}/state`,
+      payload: {
+        status: "connected_p2p",
+        routeMode: "direct",
+      },
+    });
+
+    expect(transition.statusCode).toBe(200);
+
+    const signal = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      headers: {
+        "x-participant-type": "controller",
+      },
+      payload: {
+        senderType: "controller",
+        messageType: "screen.frame.feedback",
+        payload: {
+          targetFps: 8,
+          targetQuality: 50,
+        },
+      },
+    });
+
+    expect(signal.statusCode).toBe(201);
+    expect(signal.json().item.messageType).toBe("screen.frame.feedback");
 
     await app.close();
   });

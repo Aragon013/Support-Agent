@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { runSystemInfo, runFirewallStatus, runServiceRestart } from "./catalog-runners.js";
+import {
+  runSystemInfo,
+  runFirewallStatus,
+  runServiceRestart,
+  runNetworkReset,
+} from "./catalog-runners.js";
 
 describe("catalog runners", () => {
   it("system.info returns hostname and platform", async () => {
@@ -46,6 +51,26 @@ describe("catalog runners", () => {
       if (result.ok) {
         const note = result.output.stdout[0] ?? "";
         expect(note).toContain("Windows");
+      }
+    } else {
+      expect(typeof result.ok).toBe("boolean");
+    }
+  });
+
+  it("network.reset rejects invalid mode", async () => {
+    const result = await runNetworkReset({ mode: "unsafe" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("invalid_params");
+    }
+  });
+
+  it("network.reset is safe on non-Windows", async () => {
+    const result = await runNetworkReset({ mode: "soft" });
+    if (process.platform !== "win32") {
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.output.stdout[0] ?? "").toContain("only available on Windows");
       }
     } else {
       expect(typeof result.ok).toBe("boolean");

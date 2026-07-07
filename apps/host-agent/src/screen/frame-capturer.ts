@@ -13,47 +13,50 @@ export interface IFrameCapturer {
   capture(): Promise<Buffer>;
 }
 
+function captureWithScreenshotDesktop(platformLabel: string): Promise<Buffer> {
+  return screenshotDesktop({ format: "png" })
+    .then((frame) => {
+      if (!Buffer.isBuffer(frame)) {
+        throw new Error("invalid_buffer_format");
+      }
+      return frame;
+    })
+    .catch((error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`${platformLabel}_capture_failed: ${msg}`);
+    });
+}
+
 /**
  * Windows frame capturer using screenshot-desktop.
  */
 export class WindowsFrameCapturer implements IFrameCapturer {
   async capture(): Promise<Buffer> {
-    try {
-      const frame = await screenshotDesktop({ format: "png" });
-      if (!Buffer.isBuffer(frame)) {
-        throw new Error("invalid_buffer_format");
-      }
-      return frame;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`windows_capture_failed: ${msg}`);
-    }
+    return captureWithScreenshotDesktop("windows");
   }
 }
 
 /**
- * Linux frame capturer using gnome-screenshot or fallback.
- * (Placeholder for MVP - can use child_process + scrot if available)
+ * Linux frame capturer using screenshot-desktop.
  */
 export class LinuxFrameCapturer implements IFrameCapturer {
   async capture(): Promise<Buffer> {
-    throw new Error("linux_capture_not_yet_implemented");
+    return captureWithScreenshotDesktop("linux");
   }
 }
 
 /**
- * macOS frame capturer using screencapture command.
- * (Placeholder for MVP)
+ * macOS frame capturer using screenshot-desktop.
  */
 export class MacFrameCapturer implements IFrameCapturer {
   async capture(): Promise<Buffer> {
-    throw new Error("macos_capture_not_yet_implemented");
+    return captureWithScreenshotDesktop("macos");
   }
 }
 
 /**
  * Factory to create platform-specific capturer.
- * Defaults to Windows (common in RDP scenarios).
+ * Uses screenshot-desktop for Windows, Linux, and macOS.
  */
 export function createFrameCapturer(platform?: string): IFrameCapturer {
   const os = platform ?? process.platform;

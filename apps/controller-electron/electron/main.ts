@@ -1,8 +1,22 @@
 import { app, BrowserWindow, ipcMain } from "electron";
+import fs from "fs";
 import path from "path";
 
 const isDev = process.env.NODE_ENV !== "production";
-const RENDERER_URL = "http://localhost:5173";
+const RENDERER_URL = process.env.RSP_RENDERER_URL ?? "http://localhost:5173";
+const APP_DISPLAY_NAME = "RemoteSupportPro";
+
+app.setName(APP_DISPLAY_NAME);
+
+const userDataPath = path.join(app.getPath("appData"), APP_DISPLAY_NAME);
+const sessionDataPath = path.join(userDataPath, "session-data");
+
+for (const targetPath of [userDataPath, sessionDataPath]) {
+  fs.mkdirSync(targetPath, { recursive: true });
+}
+
+app.setPath("userData", userDataPath);
+app.setPath("sessionData", sessionDataPath);
 
 let mainWindow: BrowserWindow | null = null;
 

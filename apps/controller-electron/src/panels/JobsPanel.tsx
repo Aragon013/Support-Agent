@@ -88,25 +88,22 @@ export function JobsPanel() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <div className="flex flex-col gap-4 p-6 text-slate-900">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-white">Job Queue</h2>
-          <p className="text-sm text-slate-400 mt-0.5">Live command execution status</p>
+          <h2 className="text-lg font-semibold text-slate-900">Command Queue</h2>
+          <p className="mt-0.5 text-sm text-slate-600">Track command progress and outcomes.</p>
         </div>
-        <button
-          onClick={fetchJobs}
-          className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
-        >
+        <button onClick={fetchJobs} className="tv-button-soft px-3 py-1.5 text-xs">
           <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
-          Refresh
+          Refresh Queue
         </button>
       </div>
 
       {jobs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-slate-600">
+        <div className="tv-empty flex flex-col items-center justify-center py-20">
           <Clock className="w-10 h-10 mb-3" />
-          <p className="text-sm">No jobs yet. Dispatch a command to start.</p>
+          <p className="text-sm">No commands yet. Run a command to start.</p>
         </div>
       ) : (
         <div className="grid gap-2">
@@ -123,7 +120,7 @@ export function JobsPanel() {
                   initial={{ opacity: 0, y: -8 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.97 }}
-                  className="flex items-center gap-4 px-4 py-3 bg-surface-900 border border-surface-800 rounded-xl"
+                  className="tv-card flex items-center gap-4 px-4 py-3"
                 >
                   <div className={cn("shrink-0", color)}>
                     {isActive ? (
@@ -133,10 +130,10 @@ export function JobsPanel() {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">
+                    <p className="truncate text-sm font-medium text-slate-900">
                       {job.catalogCommandId}
                     </p>
-                    <p className="text-xs text-slate-500 font-mono truncate">{job.id}</p>
+                    <p className="truncate font-mono text-xs text-slate-500">{job.id}</p>
                   </div>
                   <div className="text-right shrink-0">
                     <p className={cn("text-xs font-semibold capitalize", color)}>

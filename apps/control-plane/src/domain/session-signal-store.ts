@@ -8,6 +8,7 @@ export const SIGNAL_MESSAGE_TYPES = [
   "clipboard.sync",
   "screen.frame.stub",
   "screen.frame.data",
+  "screen.frame.feedback",
 ] as const;
 
 export type SessionSignalMessageType = (typeof SIGNAL_MESSAGE_TYPES)[number];

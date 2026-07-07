@@ -15,11 +15,14 @@ export function TitleBar() {
   const api = window.electronAPI;
 
   return (
-    <div className="drag-region h-10 flex items-center justify-between px-4 bg-surface-950 border-b border-surface-800 select-none shrink-0">
+    <div className="drag-region flex h-11 shrink-0 items-center justify-between border-b border-brand/30 bg-gradient-to-r from-brand/95 via-brand-dark to-surface-900 px-4 select-none">
       <div className="flex items-center gap-2 no-drag">
-        <div className="w-2.5 h-2.5 rounded-full bg-brand" />
-        <span className="text-xs font-semibold tracking-widest uppercase text-slate-400">
+        <div className="h-2.5 w-2.5 rounded-full bg-white/90" />
+        <span className="text-xs font-semibold tracking-[0.18em] uppercase text-blue-50/90">
           RemoteSupportPro
+        </span>
+        <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-50/90">
+          Control Center
         </span>
       </div>
       <div className="flex items-center gap-1 no-drag">
@@ -57,7 +60,7 @@ function TitleButton({
       onClick={onClick}
       aria-label={label}
       className={cn(
-        "w-7 h-7 flex items-center justify-center rounded text-slate-400 hover:text-white hover:bg-surface-700 transition-colors",
+        "flex h-7 w-7 items-center justify-center rounded text-blue-100/75 transition-colors hover:bg-white/15 hover:text-white",
         className,
       )}
     >

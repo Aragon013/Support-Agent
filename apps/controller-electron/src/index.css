@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,13 +7,51 @@
 @layer base {
   * { @apply border-surface-700; }
   body {
-    @apply bg-surface-950 text-slate-100 font-sans;
+    @apply text-slate-100 font-sans;
+    background:
+      radial-gradient(circle at 0% 0%, rgba(11, 132, 255, 0.18), transparent 34%),
+      radial-gradient(circle at 100% 100%, rgba(76, 198, 255, 0.12), transparent 30%),
+      linear-gradient(180deg, #0d233d 0%, #08162a 100%);
     -webkit-app-region: none;
   }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { @apply bg-surface-900; }
-  ::-webkit-scrollbar-thumb { @apply bg-surface-700 rounded-full; }
-  ::-webkit-scrollbar-thumb:hover { @apply bg-slate-500; }
+  ::-webkit-scrollbar-track { @apply bg-surface-900/80; }
+  ::-webkit-scrollbar-thumb { @apply bg-brand/50 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-brand; }
+}
+
+@layer components {
+  .tv-panel {
+    @apply rounded-3xl border border-blue-100 bg-white/95 shadow-sm;
+  }
+
+  .tv-card {
+    @apply rounded-xl border border-blue-100 bg-white shadow-sm;
+  }
+
+  .tv-card-soft {
+    @apply rounded-xl border border-blue-100 bg-blue-50/70 shadow-sm;
+  }
+
+  .tv-input {
+    @apply rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand;
+  }
+
+  .tv-button-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark disabled:opacity-50;
+  }
+
+  .tv-button-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-blue-100 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand/30 disabled:opacity-50;
+  }
+
+  .tv-button-soft {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand/30 disabled:opacity-50;
+  }
+
+  .tv-empty {
+    @apply rounded-2xl border border-blue-100 bg-white/95 text-slate-500 shadow-sm;
+  }
 }
 
 @layer utilities {

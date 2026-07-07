@@ -53,6 +53,31 @@ describe("command routes policy integration", () => {
     await app.close();
   });
 
+  it("returns 403 when endpoint install profile is remote_only", async () => {
+    const app = buildApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/commands/jobs",
+      headers: {
+        "x-endpoint-install-profile": "remote_only",
+      },
+      payload: {
+        tenantId: "tenant-1",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        catalogCommandId: "diagnostic.system.info",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    const body = response.json();
+    expect(body.code).toBe("policy_denied");
+    expect(body.reason).toBe("install_profile_remote_only");
+
+    await app.close();
+  });
+
   it("returns 202 and mfa_pending for high risk when MFA is missing", async () => {
     const app = buildApp();
 

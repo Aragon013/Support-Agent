@@ -4,6 +4,7 @@ import {
   buildControlInputResultPayload,
   buildSessionSignalWsUrl,
   evaluateControlInputPolicy,
+  parseScreenFrameFeedback,
 } from "./session-signal-client.js";
 
 describe("session-signal-client helpers", () => {
@@ -119,5 +120,31 @@ describe("session-signal-client helpers", () => {
       denyCode: "session_not_active",
       handledAt: "2026-07-06T12:00:00.000Z",
     });
+  });
+
+  it("parses valid screen frame feedback payload", () => {
+    const payload = parseScreenFrameFeedback({
+      targetFps: 12,
+      targetQuality: 67,
+      maxInFlight: 4,
+      measuredRttMs: 45,
+      reason: "controller-manual",
+    });
+
+    expect(payload).toEqual({
+      targetFps: 12,
+      targetQuality: 70,
+      maxInFlight: 2,
+      measuredRttMs: 45,
+      reason: "controller-manual",
+    });
+  });
+
+  it("rejects screen frame feedback without usable values", () => {
+    const payload = parseScreenFrameFeedback({
+      reason: "no-numeric-hints",
+    });
+
+    expect(payload).toBeNull();
   });
 });

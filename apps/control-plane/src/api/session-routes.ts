@@ -26,6 +26,10 @@ import {
   registerSessionSignalWsRoute,
   SessionSignalWsHub,
 } from "./session-signal-ws.js";
+import {
+  InMemoryEndpointRegistry,
+  type EndpointInstallProfile,
+} from "../domain/endpoint-registry.js";
 
 type CreateSessionBody = {
   tenantId: string;
@@ -75,7 +79,8 @@ function isSignalDirectionAllowed(
       messageType === "signal.offer" ||
       messageType === "signal.ice-candidate" ||
       messageType === "control.input" ||
-      messageType === "clipboard.sync"
+      messageType === "clipboard.sync" ||
+      messageType === "screen.frame.feedback"
     );
   }
 
@@ -112,6 +117,14 @@ function isSignalStateAllowed(
   }
 
   if (messageType !== "screen.frame.stub" && messageType !== "screen.frame.data") {
+    if (messageType === "screen.frame.feedback") {
+      return (
+        status === "connected_p2p" ||
+        status === "connected_relay" ||
+        status === "reconnecting"
+      );
+    }
+
     return true;
   }
 
@@ -166,6 +179,30 @@ function parseEndpointLicense(value: unknown): "active" | "inactive" {
   return value === "inactive" ? "inactive" : "active";
 }
 
+function parseEndpointInstallProfile(value: unknown): EndpointInstallProfile {
+  if (
+    value === "remote_only" ||
+    value === "support_limited_no_folders" ||
+    value === "support_full"
+  ) {
+    return value;
+  }
+
+  return "support_full";
+}
+
+function normalizeRequestedCapabilities(
+  accessMode: SessionAccessMode,
+  requested: SessionCapability[],
+): SessionCapability[] {
+  const next =
+    accessMode === "view"
+      ? requested.filter((capability) => capability !== "input")
+      : requested;
+
+  return next.length > 0 ? next : ["screen"];
+}
+
 function emitStateChanged(
   eventBus: InMemorySessionEventBus,
   session: SessionRecord,
@@ -192,9 +229,11 @@ export function registerSessionRoutesWithDeps(
   const eventBus = new InMemorySessionEventBus();
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
   const signalStore = new InMemorySessionSignalStore();
+  const endpointRegistry = new InMemoryEndpointRegistry();
   const wsHub = new SessionEventsWsHub();
   const signalWsHub = new SessionSignalWsHub(signalStore);
   const detachWs = wsHub.attach(eventBus);
+  const isDev = process.env.NODE_ENV === "development";
 
   registerSessionEventsWsRoute(app, wsHub);
   registerSessionSignalWsRoute(app, signalWsHub, (id) => store.getById(id));
@@ -203,20 +242,66 @@ export function registerSessionRoutesWithDeps(
     detachWs();
   });
 
+  /**
+   * GET /api/v1/endpoints/:id/session-policy
+   * Returns the endpoint's security policy (installProfile, license status, etc.)
+   * 
+   * In production: reads from the endpoint registry (authoritative source).
+   * In dev: headers are treated as hints for testing purposes.
+   */
   app.get(
     "/api/v1/endpoints/:id/session-policy",
     async (
       req: FastifyRequest<{ Params: EndpointPolicyParams }>,
       reply: FastifyReply,
     ) => {
-      const unattended = parseEndpointUnattended(
-        req.headers["x-endpoint-unattended"],
-      );
+      const endpointId = req.params.id;
+      
+      // Try to load from registry first (authoritative source)
+      const registeredEndpoint = endpointRegistry.get(endpointId);
+      
+      if (registeredEndpoint) {
+        // Endpoint is registered in our system
+        return reply.code(200).send({
+          endpointId: registeredEndpoint.endpointId,
+          unattendedEnabled: registeredEndpoint.unattendedEnabled,
+          requiresUserConsent: registeredEndpoint.requiresUserConsent,
+          maxActiveControlSessions: registeredEndpoint.maxActiveControlSessions,
+          installProfile: registeredEndpoint.installProfile,
+          supportCommandsAllowed: registeredEndpoint.supportCommandsAllowed,
+          folderActionsAllowed: registeredEndpoint.folderActionsAllowed,
+        });
+      }
+      
+      // Endpoint not registered: use header hints (dev mode only) or safe defaults
+      if (isDev) {
+        // In dev, allow headers to override for testing
+        const unattended = parseEndpointUnattended(
+          req.headers["x-endpoint-unattended"],
+        );
+        const installProfile = parseEndpointInstallProfile(
+          req.headers["x-endpoint-install-profile"],
+        );
+        return reply.code(200).send({
+          endpointId,
+          unattendedEnabled: unattended,
+          requiresUserConsent: !unattended,
+          maxActiveControlSessions: 1,
+          installProfile,
+          supportCommandsAllowed: installProfile !== "remote_only",
+          folderActionsAllowed: installProfile === "support_full",
+        });
+      }
+      
+      // In production, unknown endpoints get the most restrictive profile
       return reply.code(200).send({
-        endpointId: req.params.id,
-        unattendedEnabled: unattended,
-        requiresUserConsent: !unattended,
+        endpointId,
+        unattendedEnabled: false,
+        requiresUserConsent: true,
         maxActiveControlSessions: 1,
+        installProfile: "remote_only",
+        supportCommandsAllowed: false,
+        folderActionsAllowed: false,
       });
     },
   );
@@ -265,6 +350,9 @@ export function registerSessionRoutesWithDeps(
       }
 
       const accessMode = parseAccessMode(body.accessMode);
+      const installProfile = parseEndpointInstallProfile(
+        req.headers["x-endpoint-install-profile"],
+      );
       if (accessMode === "control" && store.hasActiveControlSession(body.tenantId, body.endpointId)) {
         return reply.code(409).send({
           code: "endpoint_busy",
@@ -275,6 +363,10 @@ export function registerSessionRoutesWithDeps(
       const unattended = parseEndpointUnattended(req.headers["x-endpoint-unattended"]);
       const approvalMode: SessionApprovalMode = unattended ? "unattended" : "user_consent";
       const initialStatus: SessionStatus = unattended ? "signaling" : "pending_approval";
+      const requestedCapabilities = normalizeRequestedCapabilities(
+        accessMode,
+        parseCapabilities(body.requestedCapabilities),
+      );
 
       const session = store.create({
         tenantId: body.tenantId,
@@ -284,7 +376,7 @@ export function registerSessionRoutesWithDeps(
         routeMode: "unknown",
         approvalMode,
         accessMode,
-        requestedCapabilities: parseCapabilities(body.requestedCapabilities),
+        requestedCapabilities,
       });
 
       eventBus.emit("session.created", session, {
@@ -301,6 +393,8 @@ export function registerSessionRoutesWithDeps(
         approvalRequired: session.status === "pending_approval",
         routeMode: session.routeMode,
         approvalMode: session.approvalMode,
+        installProfile,
+        requestedCapabilities,
       });
     },
   );
@@ -506,7 +600,11 @@ export function registerSessionRoutesWithDeps(
       }
 
       if (
-        (messageType === "screen.frame.stub" || messageType === "screen.frame.data") &&
+        (
+          messageType === "screen.frame.stub" ||
+          messageType === "screen.frame.data" ||
+          messageType === "screen.frame.feedback"
+        ) &&
         !found.requestedCapabilities.includes("screen")
       ) {
         auditStore.append({

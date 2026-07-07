@@ -25,7 +25,7 @@ const CODE_COLOR: Record<string, string> = {
 };
 
 export function AuditPanel() {
-  const [tenantId, setTenantId] = useState("tenant-1");
+  const [tenantId, setTenantId] = useState("");
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -48,34 +48,29 @@ export function AuditPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-5 p-6">
+    <div className="flex flex-col gap-5 p-6 text-slate-900">
       <div>
-        <h2 className="text-lg font-semibold text-white">Audit Trail</h2>
-        <p className="text-sm text-slate-400 mt-0.5">
-          90-day retention · sensitive fields redacted
+        <h2 className="text-lg font-semibold text-slate-900">Audit Log</h2>
+        <p className="mt-0.5 text-sm text-slate-600">
+          View security and action records.
         </p>
       </div>
 
       <div className="flex gap-2">
-        <input
-          value={tenantId}
-          onChange={(e) => setTenantId(e.target.value)}
-          placeholder="Tenant ID"
-          className="flex-1 bg-surface-800 border border-surface-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand"
-        />
+        <input value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="Tenant ID" className="tv-input flex-1" />
         <button
           onClick={load}
           disabled={loading}
-          className="px-4 py-2 bg-brand hover:bg-brand-dark text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-40"
+          className="tv-button-primary rounded-lg disabled:opacity-40"
         >
-          {loading ? "Loading…" : "Load"}
+          {loading ? "Loading Records..." : "Load Records"}
         </button>
       </div>
 
       {records.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-600">
+        <div className="tv-empty flex flex-col items-center justify-center py-16">
           <ShieldCheck className="w-10 h-10 mb-3" />
-          <p className="text-sm">Enter a tenant ID and click Load.</p>
+          <p className="text-sm">Enter a tenant ID and click Load Records.</p>
         </div>
       ) : (
         <div className="grid gap-2">
@@ -88,11 +83,11 @@ export function AuditPanel() {
                 initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.02 }}
-                className="flex items-start gap-3 px-4 py-3 bg-surface-900 border border-surface-800 rounded-xl"
+                className="tv-card flex items-start gap-3 px-4 py-3"
               >
                 <Icon className={cn("w-4 h-4 mt-0.5 shrink-0", color)} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-mono font-medium text-white">{rec.code}</p>
+                  <p className="font-mono text-sm font-medium text-slate-900">{rec.code}</p>
                   <p className="text-xs text-slate-500">
                     {new Date(rec.createdAt).toLocaleString()} · op: {rec.operatorId}
                   </p>
