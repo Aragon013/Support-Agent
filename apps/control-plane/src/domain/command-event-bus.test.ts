@@ -50,4 +50,29 @@ describe("InMemoryCommandEventBus", () => {
     expect(envelopes).toHaveLength(1);
     expect(envelopes[0]?.kind).toBe("command.abort");
   });
+
+  it("redacts sensitive fields recursively in transition details", () => {
+    const bus = new InMemoryCommandEventBus();
+    const job = makeJob({ id: "job-redact" });
+
+    const event = bus.emitTransition(job, {
+      token: "abc",
+      nested: {
+        password: "secret",
+        keep: "ok",
+      },
+      arr: [
+        { otp: "123456" },
+        { plain: "value" },
+      ],
+    });
+
+    expect(event.details?.token).toBe("[REDACTED]");
+    expect((event.details?.nested as Record<string, unknown>)?.password).toBe("[REDACTED]");
+    expect((event.details?.nested as Record<string, unknown>)?.keep).toBe("ok");
+
+    const arr = event.details?.arr as Array<Record<string, unknown>>;
+    expect(arr[0]?.otp).toBe("[REDACTED]");
+    expect(arr[1]?.plain).toBe("value");
+  });
 });
