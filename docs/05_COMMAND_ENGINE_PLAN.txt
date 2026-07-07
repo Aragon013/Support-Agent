@@ -1,0 +1,338 @@
+COMMAND ENGINE - PLAN TECNICO V1
+Fecha: 2026-07-06
+Estado: Diseno base consolidado (ready para implementacion)
+
+1) OBJETIVO
+Disenar un modulo Command Engine seguro, auditable y gobernado por politicas para ejecutar acciones remotas controladas sobre endpoints Host Agent, con enfoque E2E, MFA efectiva para acciones sensibles y trazabilidad completa.
+
+2) CONTEXTO DE FASE
+Completado previamente:
+- Fase 1: Auth + Tenant + Roles.
+- Fase 2: Session + Signaling.
+- Fase 3: Host Agent.
+- Fase 4: File Transfer.
+
+Esta fase define Command Engine como capa de ejecucion remota de comandos sobre endpoints, usando los cimientos de seguridad y sesion ya cerrados.
+
+3) ALCANCE DEL MODULO
+Incluye:
+- Catalogo de comandos permitidos por tenant/role/endpoint.
+- Ejecucion remota asincrona y streaming de salida estandar.
+- Comandos predefinidos y comandos parametrizados con validacion estricta.
+- Politicas por tenant para allow/deny, timeout, concurrencia y approval MFA.
+- Cola y control de ejecucion por endpoint.
+- Auditoria detallada de solicitud, decision, inicio, salida resumida y resultado.
+- Integracion con Session + Signaling y Host Agent.
+- Integracion con licencia endpoint (gate obligatorio).
+
+Fuera de alcance en esta fase:
+- Shell interactiva libre full TTY.
+- Scripts arbitrarios sin allowlist.
+- Marketplace de playbooks.
+- Release publico o despliegue productivo.
+
+4) PRINCIPIOS NO NEGOCIABLES
+- E2E obligatorio para payload de ejecucion y stream de output.
+- MFA step-up obligatorio para comandos de riesgo alto.
+- Auditoria retenida minimo 90 dias.
+- Licencia endpoint activa requerida antes de ejecutar.
+- Control-plane maneja metadata, nunca contenido sensible en claro.
+- No-release: solo diseno e implementacion interna controlada.
+
+5) MODELO FUNCIONAL
+5.1 Tipos de comando
+- Diagnostic: info sistema, red, procesos, servicios.
+- Maintenance: limpiar cache, reiniciar servicio permitido.
+- Security-safe ops: lectura de estado de AV/firewall.
+- Tenant custom command: preaprobado, versionado y restringido.
+
+5.2 Niveles de riesgo
+- low: lectura no sensible.
+- medium: cambia estado reversible y acotado.
+- high: impacto operativo relevante.
+- critical: potencial disrupcion (normalmente bloqueado en V1).
+
+5.3 Modo de ejecucion
+- one-shot: comando puntual con timeout.
+- bounded stream: salida en chunks y fin esperado.
+- queued execution: cuando endpoint esta ocupado o politica limita concurrencia.
+
+6) FLUJOS FUNCIONALES
+6.1 Solicitud de ejecucion
+- Operador autenticado solicita run-command sobre endpoint licenciado.
+- Control-plane valida tenant, rol, politica y estado de endpoint.
+- Si comando requiere MFA step-up y no hay prueba reciente, forzar challenge.
+- Si todo ok, crear command_job en estado queued o policy_check.
+
+6.2 Despacho y ejecucion en Host
+- Host Agent recibe envelope cifrado E2E.
+- Host revalida politica local minima (defense in depth).
+- Host ejecuta mediante adaptador seguro (sin shell libre por defecto).
+- Stream de salida va cifrado por data channel/session.
+- Host reporta exit_code, metricas y resumen de output sanitizado.
+
+6.3 Cancelacion
+- Operador autorizado puede cancelar command_job activo.
+- Host intenta termino gracioso y luego kill forzado con ventana controlada.
+- Estado final cancelled con motivo estandar.
+
+6.4 Reintento
+- Permitido solo para fallas transitorias y si politica lo habilita.
+- Se crea nueva attempt vinculada al mismo command_job.
+- Mantener cadena de auditoria completa.
+
+7) MAQUINA DE ESTADOS (JOB)
+- created
+- policy_check
+- mfa_pending
+- queued
+- dispatched
+- running
+- streaming
+- verifying
+- completed
+- failed
+- cancelled
+- blocked
+
+Reglas clave:
+- created -> policy_check al registrar solicitud.
+- policy_check -> mfa_pending si riesgo exige step-up.
+- mfa_pending -> queued al completar MFA.
+- policy_check/mfa_pending -> blocked si deny.
+- queued -> dispatched cuando endpoint acepta slot.
+- dispatched -> running al iniciar proceso.
+- running -> streaming cuando hay salida.
+- running/streaming -> verifying al finalizar proceso.
+- verifying -> completed si resultado valido.
+- cualquier estado activo -> failed/cancelled por error o accion operador.
+
+8) CONTRATOS Y EVENTOS V1
+8.1 HTTP
+POST /api/v1/commands/jobs
+GET  /api/v1/commands/jobs/{id}
+POST /api/v1/commands/jobs/{id}/cancel
+POST /api/v1/commands/jobs/{id}/retry
+GET  /api/v1/commands/catalog
+
+8.2 WebSocket eventos
+- command.job.created
+- command.job.policy.denied
+- command.job.mfa.required
+- command.job.queued
+- command.job.dispatched
+- command.job.started
+- command.job.output.chunk
+- command.job.progress
+- command.job.completed
+- command.job.failed
+- command.job.cancelled
+
+8.3 Data channel mensajes (E2E)
+- command.init
+- command.stdin.disabled (V1 explicito: no shell interactiva)
+- command.stdout.chunk
+- command.stderr.chunk
+- command.exit
+- command.abort
+
+9) MODELO DE DATOS MINIMO
+Tabla command_jobs:
+- id (uuid pk)
+- tenant_id
+- endpoint_id
+- session_id (nullable)
+- operator_id
+- catalog_command_id
+- command_version
+- requested_params_json
+- risk_level
+- requires_mfa (bool)
+- mfa_verified_at (nullable)
+- status
+- priority
+- attempt_count
+- max_attempts
+- queued_at
+- started_at (nullable)
+- completed_at (nullable)
+- exit_code (nullable)
+- fail_reason (nullable)
+- created_at
+
+Tabla command_attempts:
+- id (uuid pk)
+- command_job_id
+- host_agent_id
+- dispatched_at
+- started_at
+- finished_at
+- exit_code (nullable)
+- timed_out (bool)
+- killed (bool)
+- cpu_time_ms (nullable)
+- wall_time_ms (nullable)
+- output_bytes
+- output_digest_sha256
+
+Tabla command_output_chunks:
+- id (uuid pk)
+- command_attempt_id
+- seq_no
+- stream_type (stdout|stderr)
+- payload_ciphertext_ref
+- payload_size
+- created_at
+
+Tabla command_policy_logs:
+- id (uuid pk)
+- command_job_id
+- rule_name
+- decision (allow|deny|stepup)
+- reason
+- created_at
+
+Tabla audit_logs (reuso):
+- id
+- tenant_id
+- operator_id
+- endpoint_id
+- session_id
+- event_type
+- event_meta_json
+- created_at
+
+10) POLICY ENGINE (TENANT + ENDPOINT)
+10.1 Campos sugeridos
+- allow_remote_command (bool)
+- allowed_command_ids (array)
+- blocked_command_ids (array)
+- max_concurrent_commands_per_endpoint
+- max_run_seconds
+- max_output_bytes
+- require_mfa_for_risk_levels (array)
+- require_role_for_risk (map role threshold)
+- approval_required_for_high (bool, opcional V1.1)
+
+10.2 Validaciones obligatorias
+- Command id debe existir y estar versionado.
+- Parametros deben pasar schema estricto (tipo, rango, regex, enum).
+- No interpolacion directa en shell.
+- Timeout y output cap obligatorios.
+- Denegar si endpoint sin licencia activa.
+
+11) SEGURIDAD Y PRIVACIDAD
+11.1 Ejecucion segura
+- Preferir ejecucion por binario/handler dedicado por comando catalogado.
+- Si se usa shell wrapper controlado, escapar y validar parametros con allowlist.
+- Ejecutar con privilegios minimos del host service account.
+- Bloquear elevacion no autorizada.
+
+11.2 E2E
+- Payload de comando y chunks de salida cifrados extremo a extremo.
+- Control-plane solo ve metadata tecnica (tamano, estado, timestamps).
+
+11.3 MFA step-up
+- Requerir MFA para riesgo high/critical segun policy tenant.
+- Ventana temporal corta para reuso de step-up (ejemplo: 10 min).
+- Auditar challenge solicitado, completado o fallido.
+
+11.4 Sanitizacion de logs
+- No guardar secretos, tokens ni lineas sensibles completas.
+- Guardar resumen: primeras N lineas seguras y hash del output completo.
+- Aplicar redaccion a patrones sensibles (keys, passwords, bearer).
+
+12) EJECUTOR HOST AGENT
+Componentes:
+- CommandDispatcher: recibe job y controla lifecycle.
+- CommandPolicyGuard: validaciones locales y limites runtime.
+- CommandRunner: ejecuta adaptador por command_id.
+- OutputStreamer: empaqueta stdout/stderr por chunk.
+- CommandWatchdog: timeout, cap de output, cancel/kill.
+
+Reglas runtime:
+- Max 1 proceso high por endpoint en V1 (configurable).
+- En cancelacion: SIGTERM equivalente, esperar grace, luego kill.
+- Limpiar procesos huerfanos y temporales.
+
+13) OBSERVABILIDAD Y SLO INICIALES
+- p95 create command_job < 300 ms.
+- p95 dispatch -> start < 2 s (endpoint online).
+- Completion success ratio por categoria y tenant.
+- Timeout ratio, cancel ratio, deny ratio por policy.
+- Metricas separadas para relay fallback.
+
+14) AUDITORIA Y RETENCION 90 DIAS
+Eventos minimos:
+- command.requested
+- command.policy.allowed
+- command.policy.denied
+- command.mfa.required
+- command.mfa.passed
+- command.dispatched
+- command.started
+- command.output.stream.opened
+- command.completed
+- command.failed
+- command.cancelled
+
+Retencion:
+- audit_logs y policy logs: minimo 90 dias.
+- output chunks: retencion corta opcional (ejemplo 7-30 dias) + digest 90 dias.
+- purga automatica por job diario con reporte.
+
+15) LICENCIA Y GATES DE NEGOCIO
+- Gate previo: endpoint_license.status == active.
+- Gate continuo: si licencia expira durante queued, bloquear dispatch.
+- Auditar denegacion por licencia como motivo especifico.
+
+16) PLAN DE IMPLEMENTACION (SLICES)
+Slice A - Dominio y contratos
+- Definir entidades, estados, APIs y eventos WS/DC.
+- Crear migraciones DB y repositorios base.
+
+Slice B - Policy + MFA gate
+- Integrar evaluacion de policy.
+- Integrar MFA step-up para riesgo high.
+
+Slice C - Host execution pipeline
+- Dispatcher + Runner + Streamer + Watchdog.
+- Cancelacion y timeout robustos.
+
+Slice D - Auditoria + observabilidad
+- Audit events completos + metricas.
+- Purga y retencion 90 dias.
+
+Slice E - Hardening
+- Fuzz de parametros.
+- Chaos test de red/corte/sobrecarga output.
+- Validacion de no-leak de secretos en logs.
+
+17) TEST PLAN MINIMO
+- Unit: policy evaluator, schema validator, state machine, redaction.
+- Integration: create->dispatch->run->complete con output stream.
+- Security: intento command injection, bypass MFA, bypass license.
+- Resilience: timeout, cancel race, reconexion de sesion, host restart.
+- Compliance: retencion 90d y purga verificada.
+
+18) CRITERIOS DE ACEPTACION
+- Solo comandos catalogados y validados pueden ejecutarse.
+- MFA se exige correctamente en riesgo configurado.
+- E2E aplicado a payload y output stream.
+- Logs/auditoria suficientes sin exponer secretos.
+- Licencia endpoint bloquea ejecucion cuando no activa.
+- Retencion 90 dias operativa y verificable.
+- Sin propuesta de release publico.
+
+19) RIESGOS Y MITIGACIONES
+- Riesgo: command injection por parametros.
+  - Mitigacion: catalogo cerrado + schema estricto + no shell libre.
+- Riesgo: abuso por operador comprometido.
+  - Mitigacion: MFA step-up + RBAC + alertas anomalia.
+- Riesgo: fuga de datos via output.
+  - Mitigacion: redaction + cap output + retencion acotada.
+- Riesgo: impacto endpoint por comandos pesados.
+  - Mitigacion: concurrencia limitada + timeout + watchdog.
+
+20) SIGUIENTE ACCION
+Usar prompts/P5_COMMAND_ENGINE_MASTER_PROMPT.txt para generar backlog tecnico implementable (tickets por slice, interfaces y pseudocodigo ejecutable).

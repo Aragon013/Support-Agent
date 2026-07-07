@@ -1,0 +1,382 @@
+SESSION + SIGNALING - PLAN TECNICO V1
+Fecha: 2026-07-06
+Estado: Ready para implementacion
+
+1) OBJETIVO
+Implementar el modulo que crea, negocia, establece y cierra sesiones remotas seguras entre Controller y Host Agent, priorizando conexion P2P y usando relay solo cuando la red lo exija.
+
+2) ALCANCE DEL MODULO
+- Creacion y ciclo de vida de sesiones remotas.
+- Signaling entre Controller, Host Agent y control-plane.
+- Negociacion P2P-first con relay fallback.
+- Autorizacion por operador, tenant, endpoint y licencia.
+- Aprobacion de sesion segun politica del endpoint.
+- Reconexion corta por cortes de red.
+- Auditoria de eventos criticos y logs debug.
+
+Fuera de alcance en este modulo:
+- Transferencia de archivos.
+- Ejecucion remota de comandos.
+- Politicas avanzadas de grabacion.
+- Facturacion y cobro.
+
+3) SUPUESTOS Y LIMITES
+- Control-plane expone API HTTP y canal WebSocket seguro para signaling.
+- Host Agent mantiene un canal saliente persistente hacia control-plane.
+- Controller Electron abre canal autenticado con MFA ya resuelto por Auth.
+- El cifrado E2E protege el trafico de sesion; signaling no puede leer contenido remoto.
+- Relay fallback se apoya en TURN/relay administrado por la plataforma.
+- La licencia por endpoint se valida antes de permitir sesion activa.
+
+4) REGLAS FUNCIONALES
+4.1 Creacion de sesion
+- Un operador autenticado solicita sesion sobre un endpoint de su tenant.
+- El sistema valida: tenant, rol, estado del endpoint, licencia activa y politica de acceso.
+- Si la politica requiere aprobacion del usuario remoto, la sesion queda en estado pending_approval.
+- Si el endpoint permite acceso desatendido, la sesion avanza a signaling.
+
+4.2 Estados de sesion
+- requested
+- pending_host
+- pending_approval
+- signaling
+- connecting_p2p
+- connected_p2p
+- connected_relay
+- reconnecting
+- ended
+- failed
+
+4.3 Signaling base
+- Controller crea una oferta inicial de sesion en control-plane.
+- Control-plane notifica al Host Agent conectado del endpoint objetivo.
+- Host Agent responde disponibilidad, capacidades y estado de aprobacion.
+- El intercambio SDP/ICE o equivalente ocurre via WebSocket autenticado.
+- Las claves efimeras de sesion se negocian extremo a extremo; control-plane solo transporta mensajes.
+
+4.4 P2P-first
+- Intentar primero ruta directa con ICE candidates host/srflx/relay.
+- Dar prioridad de seleccion a direct > reflexive > relay.
+- Si no hay camino directo en ventana corta de establecimiento, degradar a relay fallback sin reiniciar la sesion logica.
+
+4.5 Relay fallback
+- Si ICE directo falla o expira, promover candidate relay.
+- La sesion debe marcar explicitamente route_mode=relay.
+- El cambio a relay debe auditarse por costo y diagnostico.
+
+4.6 Reconexion
+- Si el canal de medios cae pero ambos extremos siguen autenticados, mantener la sesion en reconnecting hasta 30 s.
+- Durante reconexion, preservar session_id y auditoria continua.
+- Si excede timeout o uno de los extremos cierra, finalizar.
+
+4.7 Politicas de control
+- Solo Admin y Tech pueden iniciar sesion remota.
+- Viewer no puede iniciar ni aceptar control.
+- El endpoint puede requerir consentimiento del usuario local.
+- El endpoint puede limitar ventanas horarias o lista de operadores permitidos.
+
+4.8 Auditoria minima
+- Toda transicion de estado relevante debe generar evento audit.
+- Debug logs deben registrar razon de fallo tecnico sin exponer secretos, claves ni payload E2E.
+
+5) REQUISITOS NO FUNCIONALES
+- Tiempo objetivo create-session p95 < 300 ms sin esperar al host.
+- Tiempo objetivo para primera conexion viable < 8 s en redes normales.
+- Timeout de decision P2P antes de relay: 3 a 5 s configurable.
+- Un endpoint no debe aceptar mas de 1 sesion de control activa por defecto.
+- Todo mensaje de signaling debe ser idempotente por message_id.
+- Retencion default de logs: 90 dias configurable.
+
+6) RESPONSABILIDADES POR COMPONENTE
+6.1 Control-plane
+- Autoriza y crea la sesion.
+- Persiste estado, rutas, timestamps y auditoria.
+- Enruta signaling entre Controller y Host Agent.
+- Expone estado de sesion para UI y soporte.
+- Nunca termina claves privadas E2E ni contenido remoto.
+
+6.2 Controller Electron
+- Inicia la sesion.
+- Muestra estado de aprobacion, conexion y calidad.
+- Genera material efimero para handshake E2E.
+- Consume canal de medios/control una vez establecida la ruta.
+
+6.3 Host Agent
+- Mantiene presencia del endpoint.
+- Recibe solicitudes entrantes y aplica politicas locales.
+- Solicita consentimiento local si corresponde.
+- Participa en handshake E2E y en la negociacion de transporte.
+
+7) MODELO DE DATOS (MINIMO)
+Tabla endpoints:
+- id (uuid pk)
+- tenant_id
+- device_name
+- status
+- unattended_enabled
+- license_status
+- last_seen_at
+
+Tabla sessions:
+- id (uuid pk)
+- tenant_id
+- endpoint_id
+- operator_id
+- status
+- route_mode (direct|relay|unknown)
+- approval_mode (unattended|user_consent)
+- started_at (nullable)
+- connected_at (nullable)
+- ended_at (nullable)
+- end_reason (nullable)
+- created_at
+- updated_at
+
+Tabla session_participants:
+- id (uuid pk)
+- session_id
+- participant_type (controller|host)
+- participant_ref_id
+- connection_status
+- joined_at
+- left_at
+
+Tabla signaling_messages:
+- id (uuid pk)
+- session_id
+- sender_type
+- message_type
+- message_id
+- payload_json_enc
+- created_at
+
+Tabla session_routes:
+- id (uuid pk)
+- session_id
+- candidate_pair_type (direct|srflx|relay)
+- selected (bool)
+- selected_at
+- details_json
+
+Tabla audit_logs:
+- id (uuid pk)
+- tenant_id
+- operator_id (nullable)
+- endpoint_id (nullable)
+- session_id (nullable)
+- event_type
+- event_meta_json
+- source_ip
+- created_at
+
+8) API Y CANALES (V1)
+HTTP:
+POST /api/v1/sessions
+GET  /api/v1/sessions/{id}
+POST /api/v1/sessions/{id}/cancel
+POST /api/v1/sessions/{id}/approve
+POST /api/v1/sessions/{id}/deny
+POST /api/v1/sessions/{id}/end
+GET  /api/v1/endpoints/{id}/session-policy
+
+WebSocket namespaces:
+- /ws/controller
+- /ws/host
+
+Eventos de signaling V1:
+- session.created
+- session.host.notified
+- session.approval.required
+- session.approved
+- session.denied
+- signal.offer
+- signal.answer
+- signal.ice-candidate
+- signal.route-probe
+- session.connecting
+- session.connected.direct
+- session.connected.relay
+- session.reconnecting
+- session.ended
+- session.failed
+
+9) CONTRATOS MINIMOS
+9.1 POST /api/v1/sessions
+Request:
+- endpoint_id
+- access_mode (view|control)
+- requested_capabilities (screen|input|clipboard)
+
+Response 201:
+- session_id
+- status
+- approval_required
+- signaling_channel
+- expires_at
+
+9.2 WebSocket signal.offer
+- session_id
+- message_id
+- seq
+- sdp
+- e2e_pubkey
+- sent_at
+
+9.3 WebSocket signal.answer
+- session_id
+- message_id
+- seq
+- sdp
+- e2e_pubkey
+- sent_at
+
+9.4 WebSocket signal.ice-candidate
+- session_id
+- message_id
+- seq
+- candidate
+- mid
+- mline_index
+- sent_at
+
+9.5 session.connected.direct / relay
+- session_id
+- route_mode
+- connected_at
+- selected_candidate_pair
+
+10) MAQUINA DE ESTADOS
+- requested -> pending_host cuando control-plane valida y despacha al host.
+- pending_host -> pending_approval cuando host esta online pero requiere consentimiento.
+- pending_host -> signaling cuando acceso desatendido esta permitido.
+- pending_approval -> signaling cuando usuario local aprueba.
+- signaling -> connecting_p2p al comenzar intercambio de transporte.
+- connecting_p2p -> connected_p2p si se selecciona ruta directa.
+- connecting_p2p -> connected_relay si expira intento directo y relay queda listo.
+- connected_p2p -> reconnecting ante corte temporal.
+- connected_relay -> reconnecting ante corte temporal.
+- reconnecting -> connected_p2p o connected_relay si recupera.
+- cualquier estado no terminal -> ended por cancelacion o cierre normal.
+- cualquier estado no terminal -> failed por timeout, politica, licencia o error tecnico no recuperable.
+
+11) PSEUDOCODIGO CLAVE
+11.1 createSession(operator, endpoint_id, access_mode)
+- assert role in {admin, tech}
+- endpoint = findEndpointByTenant(operator.tenant_id, endpoint_id)
+- if endpoint null or offline: audit fail; return 404/409
+- if endpoint.license_status != active: audit denied; return 402/403
+- policy = loadEndpointPolicy(endpoint)
+- session = insert session(status=requested, route_mode=unknown)
+- notifyHost(endpoint, session)
+- if policy.requires_user_consent:
+  - set session.status = pending_approval
+- else:
+  - set session.status = signaling
+- audit session created
+- return session summary
+
+11.2 handleSignalMessage(participant, session_id, message)
+- session = loadSessionForTenant(participant.tenant_id, session_id)
+- if session terminal: reject
+- assert participant authorized for session
+- if duplicate(message.message_id): ack and ignore
+- persist signaling_messages row
+- forwardToPeer(session_id, message)
+- if message.type indicates transport-progress: update transient session state
+
+11.3 finalizeRoute(session_id, probe_result)
+- if probe_result.direct_ok:
+  - set route_mode = direct
+  - set status = connected_p2p
+  - save selected route
+  - audit connected direct
+- else if probe_result.relay_ok:
+  - set route_mode = relay
+  - set status = connected_relay
+  - save selected route
+  - audit connected relay
+- else:
+  - set status = failed
+  - set end_reason = connectivity_failed
+  - audit failed
+
+11.4 reconnectSession(session_id)
+- if now - last_media_ok > 30 s:
+  - end session reason reconnect_timeout
+- restart signaling exchange with same session_id
+- prefer last known route first only if still valid
+- downgrade to relay if direct recovery fails fast
+
+12) SEGURIDAD Y MITIGACIONES
+- Riesgo: signaling spoofing.
+  - Mitigacion: WebSocket autenticado, message signing opcional por sesion, participant binding por session_id.
+- Riesgo: cross-tenant session hijack.
+  - Mitigacion: todas las queries y canales filtran tenant_id y participant_ref_id.
+- Riesgo: replay de mensajes ICE/SDP.
+  - Mitigacion: message_id unico, seq monotono por participante, expiracion corta.
+- Riesgo: relay como punto de inspeccion.
+  - Mitigacion: E2E obligatorio con claves efimeras por sesion; relay solo ve trafico cifrado.
+- Riesgo: abuso de sesiones concurrentes.
+  - Mitigacion: limite por endpoint, rate limit por operador, cierre forzado de sesiones zombis.
+- Riesgo: fuga de secretos en logs.
+  - Mitigacion: redaccion de SDP sensible, nunca loggear claves privadas ni payload descifrado.
+
+13) POLITICA DE AUDITORIA
+Registrar al menos:
+- session.create.requested
+- session.host.notified
+- session.approval.required
+- session.approved
+- session.denied
+- session.signal.offer.forwarded
+- session.signal.answer.forwarded
+- session.route.direct.selected
+- session.route.relay.selected
+- session.reconnecting
+- session.ended
+- session.failed
+
+14) CRITERIOS DE ACEPTACION
+- Un operador Admin o Tech puede crear sesion sobre endpoint de su tenant.
+- Viewer no puede crear sesion.
+- Endpoint offline o sin licencia activa no inicia sesion.
+- Flujo con aprobacion local funciona y queda auditado.
+- Ruta directa se selecciona cuando existe.
+- Relay fallback entra sin perder session_id ni auditoria.
+- Reconexion corta recupera sesion sin duplicar filas activas.
+- Todo evento critico queda en audit log.
+
+15) PLAN DE TESTS
+Unit tests:
+- state machine de sesion
+- policy evaluator
+- deduplicacion por message_id
+- selector de ruta direct vs relay
+
+Integration tests:
+- create session happy path unattended
+- approval required path
+- endpoint offline denied
+- license invalid denied
+- direct connect success
+- direct timeout then relay success
+- reconnect within 30 s
+- cross-tenant session access denied
+
+Security tests:
+- replay de signal.offer
+- WebSocket token expirado
+- spoof de participant_type
+- intento de join a session_id de otro tenant
+
+16) LOW BUDGET TOKEN MODE
+- Cambios menores del modulo: MINOR
+- Diseno API, estado y pseudocodigo: MEDIUM
+- Revisiones de seguridad E2E, relay y abuse cases: MAX
+
+17) DEFINITION OF DONE
+- Documento tecnico del modulo aprobado.
+- Contratos API V1 congelados para implementacion inicial.
+- Maquina de estados implementable sin ambiguedad.
+- Eventos de auditoria definidos.
+- Test plan base acordado.

@@ -18,6 +18,26 @@ Antes de clear, guardar snapshot corto:
 - Restricciones fijas
 - Siguiente accion unica
 
+Regla anti-sobreconsumo (importante):
+- Snapshot compacto objetivo: 90 a 160 tokens.
+- Maximo recomendado: 12 lineas.
+- No incluir historico largo ni explicaciones.
+- Solo estado actual + siguiente accion.
+- Si el snapshot supera 220 tokens, reducirlo antes de abrir chat nuevo.
+
+Heuristica practica clear vs seguir:
+- Si ya cerraste modulo o cambias fase: clear + snapshot compacto.
+- Si sigues en el mismo micro-bloque (<45 min) y sin mezcla de temas: continuar chat.
+- Si el hilo acumula mucho contexto repetido: clear sale mas barato a mediano plazo.
+
+Template ultra-compacto (copiar/pegar):
+Proyecto: RemoteSupportPro
+Fase: [actual]
+Cerrado: [modulo o bloque]
+Pendiente: [1 tarea inmediata]
+Restricciones: E2E, MFA, logs 90d, licencia endpoint, no-release
+Siguiente accion: [1 accion]
+
 Plantilla de snapshot:
 Proyecto: RemoteSupportPro
 Fase: [actual]

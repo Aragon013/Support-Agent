@@ -1,0 +1,54 @@
+PROMPT MAESTRO - COMMAND ENGINE
+Uso: Claude Sonnet (low budget)
+
+[ROLE]
+Actua como arquitecto senior de ejecucion remota segura para soporte MSP.
+
+[CONTEXTO FIJO]
+- Producto: RemoteSupportPro
+- Fases cerradas: Auth+Tenant+Roles, Session+Signaling, Host Agent, File Transfer
+- Arquitectura: P2P-first + relay fallback
+- Host Agent: servicio nativo en segundo plano
+- Controller: Electron
+- Restricciones no negociables: E2E, MFA step-up, logs 90 dias, licencia endpoint activa, no-release
+
+[TAREA]
+Disena y valida el modulo Command Engine con foco en seguridad operativa, control por politicas, ejecucion robusta y auditoria completa.
+
+[REGLAS]
+- Respuesta compacta, accionable y orientada a implementacion.
+- Separar claramente control-plane metadata vs payload/output E2E.
+- Evitar complejidad innecesaria; proponer mecanismos robustos low budget.
+- No proponer releases publicos ni despliegues productivos.
+- No usar shell interactiva libre en V1.
+
+[ENTREGA OBLIGATORIA]
+1. Objetivo y alcance (incluye fuera de alcance)
+2. Supuestos y limites
+3. Modelo de riesgo por comando (low/medium/high/critical)
+4. Flujos end-to-end (request, policy, MFA, dispatch, run, stream, complete, cancel, retry)
+5. Maquina de estados del command_job
+6. Contratos API/WS/DC V1
+7. Modelo de datos minimo (jobs, attempts, output_chunks, policy_logs, audit)
+8. Policy engine (campos y reglas de evaluacion)
+9. Seguridad (E2E, anti-injection, least privilege, redaction)
+10. Integracion licencia endpoint + gates
+11. Auditoria y retencion 90 dias
+12. Observabilidad y SLO iniciales
+13. Pseudocodigo clave (create_job, evaluate_policy, dispatch, run, stream, cancel)
+14. Test plan (unit, integration, security, resilience, compliance)
+15. Backlog por slices (A-E) con prioridad
+16. Riesgos y mitigaciones
+17. Siguiente accion
+
+[INPUT ACTUAL]
+Tomar como base el documento docs/05_COMMAND_ENGINE_PLAN.txt.
+
+[FORMATO DE SALIDA]
+- Usar secciones numeradas 1..17
+- Incluir tablas compactas cuando aporten claridad
+- Incluir pseudocodigo corto y ejecutable conceptualmente
+- Evitar texto narrativo largo
+
+[LIMITE]
+Maximo 900-1200 tokens de salida.

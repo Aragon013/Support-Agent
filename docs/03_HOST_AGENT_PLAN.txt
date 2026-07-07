@@ -1,0 +1,379 @@
+HOST AGENT - PLAN TECNICO V1
+Fecha: 2026-07-06
+Estado: Ready para implementacion
+
+1) OBJETIVO
+Definir un Host Agent nativo, persistente y seguro que opere en segundo plano, exponga capacidades remotas controladas y se integre con Session + Signaling bajo enfoque P2P-first con relay fallback.
+
+2) ALCANCE DEL MODULO
+- Servicio nativo always-on (background) por endpoint.
+- Registro (enrollment) del endpoint al tenant.
+- Presencia y heartbeat hacia control-plane.
+- Recepcion y manejo de solicitudes de sesion.
+- Ejecucion de canal remoto (pantalla, input, clipboard) bajo politica.
+- Consentimiento local cuando aplique.
+- Politicas locales de seguridad y endurecimiento.
+- Logs debug/auditoria local con retencion y envio seguro.
+- Actualizacion del agente con canal firmado y rollback seguro.
+
+Fuera de alcance en este modulo:
+- Facturacion/licenciamiento comercial completo.
+- UI rica de operador (pertenece a Controller).
+- Motor completo de transferencia de archivos.
+- Motor completo de command automation.
+
+3) SUPUESTOS Y LIMITES
+- El endpoint ejecuta Windows en la fase inicial.
+- El agente corre como servicio con cuenta de bajo privilegio por defecto.
+- El canal saliente a control-plane esta permitido por firewall en la mayoria de redes.
+- Sesiones remotas requieren validacion de licencia por endpoint en control-plane.
+- E2E obligatorio: el agente no acepta canal remoto sin handshake valido.
+- No se publican releases sin aprobacion explicita.
+
+4) CAPAS DEL AGENTE
+4.1 Service Core
+- Ciclo de vida del proceso y watchdog interno.
+- Gestion de config local y secretos.
+- Scheduler de tareas periodicas (heartbeat, rotate logs, health checks).
+
+4.2 Network Gateway
+- Conexion persistente saliente a control-plane (WebSocket/mTLS-token).
+- Manejo de reconexion exponencial con jitter.
+- Multiplex de eventos: signaling, comandos de control, policy updates.
+
+4.3 Session Runtime
+- Estado de sesiones activas y cola de solicitudes.
+- Integracion con transport (P2P/relay) y cifrado E2E.
+- Control de concurrencia por endpoint (default: 1 sesion de control activa).
+
+4.4 Device Capability Layer
+- Captura de pantalla eficiente.
+- Inyeccion de teclado/raton bajo politica.
+- Clipboard bridge controlado.
+- Hooks para modulos futuros (file transfer, commands).
+
+4.5 Policy & Security Layer
+- Evaluacion local de politicas recibidas del tenant.
+- Reglas de consentimiento, horario, allowlist de operadores.
+- Kill-switch local y lockdown temporal ante riesgo.
+
+4.6 Observability Layer
+- Logs debug estructurados.
+- Eventos de auditoria local y forwarding al control-plane.
+- Metricas basicas de salud (cpu, memoria, latencia de heartbeat, tasa reconnect).
+
+5) REGLAS FUNCIONALES
+5.1 Enrollment inicial
+- El endpoint se registra con enrollment_token de un solo uso y vencimiento corto.
+- Se genera agent_id unico y par de claves del dispositivo.
+- El agente almacena credenciales cifradas en almacenamiento seguro local.
+
+5.2 Presencia
+- Heartbeat cada 15 s (configurable) con estado, version, capacidad y salud.
+- Si pierde conectividad, entra en modo degraded y reintenta con backoff.
+
+5.3 Recepcion de sesion
+- Al recibir session.requested, valida policy local y estado de endpoint.
+- Si requiere consentimiento local, muestra prompt nativo al usuario.
+- Si se aprueba, responde session.approved y entra a signaling.
+- Si se niega o expira, responde session.denied con motivo estandarizado.
+
+5.4 Ejecucion de sesion
+- Solo inicia canal remoto con session_id activo y handshake E2E valido.
+- Aplica permisos por capability (view/control/clipboard).
+- Registra eventos de inicio, cambio de ruta, reconexion y cierre.
+
+5.5 Reconexion
+- Ante caida breve, conserva contexto de sesion hasta 30 s.
+- Reintenta transporte directo primero; degrada a relay si corresponde.
+
+5.6 Actualizaciones
+- El agente consulta manifiesto firmado.
+- Descarga paquete firmado, verifica integridad y firma.
+- Actualizacion atomica con rollback automatico si falla health post-update.
+
+5.7 Autoproteccion
+- Deteccion de manipulacion de binario/config sensible.
+- Si detecta estado inseguro: bloquea nuevas sesiones y emite alerta audit.
+
+6) SEGURIDAD (HOST)
+6.1 Identidad del agente
+- agent_id + device keypair por endpoint.
+- Rotacion periodica de credenciales de sesion.
+
+6.2 Secretos locales
+- Tokens y claves protegidos con DPAPI (Windows fase inicial).
+- Nunca guardar secretos en texto plano ni logs.
+
+6.3 Canal con control-plane
+- Autenticacion fuerte de agente en cada reconexion.
+- Pinning de certificado o trust policy estricta configurable.
+
+6.4 Hardening de runtime
+- Servicio con privilegios minimos.
+- ACL estricta en carpeta de instalacion y config.
+- Validacion de payload entrante con esquema estricto.
+
+6.5 Consentimiento y privacidad
+- Banner/indicador local configurable durante sesion activa.
+- Politica de privacidad para clipboard y captura segun tenant.
+
+7) MAQUINA DE ESTADOS DEL AGENTE
+Estados de conectividad:
+- booting
+- enrolling
+- online
+- degraded
+- offline
+- updating
+- quarantined
+
+Estados de sesion local:
+- idle
+- pending_request
+- waiting_consent
+- signaling
+- connecting
+- active_direct
+- active_relay
+- reconnecting
+- ending
+- ended
+- failed
+
+Reglas clave:
+- online + session.requested -> pending_request
+- pending_request + consent required -> waiting_consent
+- pending_request/waiting_consent + approved -> signaling -> connecting
+- connecting -> active_direct o active_relay
+- active_* -> reconnecting ante corte breve
+- reconnecting -> active_* o failed
+- cualquier estado activo -> ending -> ended por cierre normal
+- cualquier estado -> quarantined por tamper/risk alto
+
+8) MODELO DE DATOS LOCAL (MINIMO)
+Archivo/tabla agent_config:
+- agent_id
+- tenant_id
+- endpoint_id
+- enrolled_at
+- current_version
+- policy_etag
+- last_update_check_at
+
+Archivo/tabla agent_secrets (protegido OS keystore):
+- device_private_key_enc
+- control_plane_token_enc
+- refresh_secret_enc
+
+Archivo/tabla agent_runtime_state:
+- connectivity_state
+- last_heartbeat_at
+- consecutive_reconnects
+- last_error_code
+- quarantine_reason
+
+Archivo/tabla local_sessions:
+- session_id
+- status
+- route_mode
+- started_at
+- ended_at
+- end_reason
+- operator_ref
+
+Archivo/tabla local_audit_queue:
+- id
+- event_type
+- event_meta_json
+- created_at
+- forwarded_at (nullable)
+- retry_count
+
+9) API/CANALES CON CONTROL-PLANE (V1)
+9.1 WebSocket /ws/host
+Eventos entrantes:
+- host.enroll.accepted
+- host.policy.updated
+- session.requested
+- session.cancelled
+- session.force_end
+- host.update.available
+
+Eventos salientes:
+- host.hello
+- host.heartbeat
+- host.health
+- session.approved
+- session.denied
+- session.state.changed
+- session.transport.metric
+- host.audit.event
+- host.update.result
+
+9.2 HTTP opcional para update artifact
+- GET /api/v1/host-updates/manifest
+- GET /api/v1/host-updates/artifacts/{version}
+
+10) CONTRATOS MINIMOS
+10.1 host.hello
+- agent_id
+- endpoint_id
+- tenant_id
+- version
+- capabilities
+- boot_time
+
+10.2 host.heartbeat
+- agent_id
+- ts
+- connectivity_state
+- session_state
+- cpu_pct
+- mem_mb
+- net_rtt_ms
+
+10.3 session.approved
+- session_id
+- agent_id
+- approval_mode (unattended|user_consent)
+- approved_at
+
+10.4 session.denied
+- session_id
+- agent_id
+- reason_code (user_denied|policy_denied|timeout|endpoint_busy)
+- denied_at
+
+10.5 session.state.changed
+- session_id
+- prev_state
+- new_state
+- route_mode
+- ts
+
+11) PSEUDOCODIGO CLAVE
+11.1 serviceMain()
+- loadConfig()
+- initSecureStore()
+- if not enrolled: startEnrollment()
+- connectControlPlaneLoop()
+- startHeartbeatScheduler()
+- startPolicyWatcher()
+- runEventLoop()
+
+11.2 onSessionRequested(msg)
+- if runtimeState in {updating, quarantined}: deny(policy_denied)
+- if hasActiveControlSession(): deny(endpoint_busy)
+- policy = getEffectivePolicy()
+- if !policyAllowsOperator(msg.operator_ref): deny(policy_denied)
+- if policy.requiresConsent:
+  - set session state waiting_consent
+  - decision = promptLocalConsent(timeout=policy.consentTimeout)
+  - if decision != approve: deny(user_denied or timeout)
+- approveSession(msg.session_id)
+- enterSignaling(msg.session_id)
+
+11.3 startRemoteChannel(session_id)
+- assert validE2EHandshake(session_id)
+- transport = connectP2PFirst(session_id, timeout=policy.p2pTimeout)
+- if transport.direct: state=active_direct
+- else if transport.relay: state=active_relay
+- else: state=failed; notify
+
+11.4 heartbeatTick()
+- metrics = collectLocalMetrics()
+- send host.heartbeat(metrics)
+- flushAuditQueue(maxBatch)
+- if tooManyReconnects(): emit host.health warning
+
+11.5 safeUpdate()
+- manifest = fetchSignedManifest()
+- if manifest.version <= current: return
+- pkg = downloadArtifact(manifest)
+- if !verifySignature(pkg, manifest): abort + audit
+- installAtomically(pkg)
+- restartService()
+- if !postUpdateHealthyWithin(60 s): rollback()
+
+12) REQUISITOS NO FUNCIONALES
+- Inicio del servicio < 5 s en hardware objetivo.
+- Heartbeat estable con jitter controlado.
+- Recuperacion tras reinicio de maquina sin intervencion manual.
+- Consumo en idle objetivo: bajo y estable (metrica monitoreada por version).
+- Manejo de errores sin crash loop.
+
+13) RIESGOS Y MITIGACIONES
+- Riesgo: endpoint en red cerrada sin salida estable.
+  - Mitigacion: buffer local de eventos + reconexion con backoff + relay fallback.
+- Riesgo: abuso por operador comprometido.
+  - Mitigacion: MFA previa, policy local strict, consentimiento y auditoria detallada.
+- Riesgo: update malicioso o corrupto.
+  - Mitigacion: firma obligatoria, verificacion previa, rollout gradual, rollback.
+- Riesgo: escalado de privilegios local.
+  - Mitigacion: principio de minimo privilegio, aislamiento de componentes sensibles.
+- Riesgo: fuga de datos por logs.
+  - Mitigacion: redaccion sistematica y clasificacion de campos sensibles.
+
+14) POLITICA DE AUDITORIA
+Registrar al menos:
+- host.enrollment.started
+- host.enrollment.completed
+- host.online
+- host.offline
+- host.policy.updated
+- session.request.received
+- session.user.consent.prompted
+- session.user.consent.approved
+- session.user.consent.denied
+- session.connected.direct
+- session.connected.relay
+- session.reconnecting
+- session.ended
+- host.update.started
+- host.update.succeeded
+- host.update.rolled_back
+- host.quarantine.enabled
+
+15) CRITERIOS DE ACEPTACION
+- El servicio arranca automaticamente y mantiene presencia online.
+- Enrollment se completa con token valido y rechaza token invalido/expirado.
+- Solicitud de sesion respeta politicas y consentimiento local.
+- Ruta directa se usa cuando es viable; relay cuando no.
+- Reconexion breve funciona sin perder continuidad de session_id.
+- Actualizacion firmada funciona con rollback ante fallo.
+- Auditoria minima disponible localmente y enviada a control-plane.
+
+16) PLAN DE TESTS
+Unit tests:
+- policy evaluator local
+- state machine de sesion local
+- parser/validator de eventos entrantes
+- secure store wrapper
+- update signature verifier
+
+Integration tests:
+- enrollment happy path
+- heartbeat + reconexion con red intermitente
+- session request + consent approve/deny
+- endpoint busy deny
+- p2p fail -> relay success
+- update success + rollback path
+
+Security tests:
+- tamper de config
+- token replay en canal host
+- payload malformado en signaling
+- acceso a secretos fuera de proceso autorizado
+
+17) LOW BUDGET TOKEN MODE
+- Ajustes menores de eventos/campos: MINOR
+- Diseno de flujos, contratos y pseudocodigo: MEDIUM
+- Hardening, criptografia, update trust-chain y anti-tamper: MAX
+
+18) DEFINITION OF DONE
+- Documento tecnico aprobado para Host Agent.
+- Contratos base host-control-plane definidos.
+- Maquinas de estado de conectividad y sesion sin ambiguedad.
+- Politica de seguridad local y update seguro definida.
+- Plan de tests base acordado.

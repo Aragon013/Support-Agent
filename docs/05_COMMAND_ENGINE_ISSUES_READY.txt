@@ -1,0 +1,214 @@
+COMMAND ENGINE - ISSUE READY TICKETS V1
+Fecha: 2026-07-06
+Fuente: docs/05_COMMAND_ENGINE_PLAN.txt + docs/05_COMMAND_ENGINE_BACKLOG.txt
+
+Formato sugerido de issue
+- Titulo
+- Contexto
+- Alcance
+- Criterios de aceptacion
+- Dependencias
+- Prioridad
+- Estimacion
+
+CP-01 | Control-plane | Domain state machine
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Implementar el modelo de estados de command_job.
+- Alcance:
+  - Estados y transiciones validas.
+  - Guard de transicion central.
+- Criterios de aceptacion:
+  - Tests unitarios para transiciones permitidas/prohibidas.
+  - Errores consistentes en conflictos de estado.
+- Dependencias: ninguna.
+
+CP-02 | Control-plane | DB migrations command engine
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Persistencia minima para jobs, attempts, output refs y policy logs.
+- Alcance:
+  - Tablas e indices definidos en plan.
+- Criterios de aceptacion:
+  - Migracion reversible y validada.
+  - Consulta por tenant/status con rendimiento estable.
+- Dependencias: CP-01.
+
+CP-03 | Control-plane | API HTTP V1 commands
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Endpoints para crear, consultar, cancelar y reintentar jobs.
+- Alcance:
+  - Implementar contratos V1 + validacion auth/tenant/role.
+- Criterios de aceptacion:
+  - OpenAPI actualizado.
+  - Manejo 403/409/422 consistente.
+- Dependencias: CP-01, CP-02.
+
+CP-04 | Control-plane | Policy evaluator
+- Prioridad: P0
+- Estimacion: L
+- Contexto: Decision allow/deny/stepup por reglas tenant + endpoint.
+- Alcance:
+  - Evaluar allowlist/blocklist, role threshold, timeout/output caps, concurrencia.
+- Criterios de aceptacion:
+  - Cobertura ramas criticas >= 90%.
+  - Decision explicable en logs de policy.
+- Dependencias: CP-01, CP-02.
+
+CP-05 | Control-plane | Param schema validation
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Parametros estrictos por command_id versionado.
+- Alcance:
+  - Validacion de tipo/rango/regex/enum.
+  - Rechazo de campos extra.
+- Criterios de aceptacion:
+  - Todos los comandos catalogados con schema.
+  - Error 422 por campo.
+- Dependencias: CP-03.
+
+CP-06 | Control-plane | MFA step-up gate
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Step-up para riesgo high/critical segun policy.
+- Alcance:
+  - Estado mfa_pending y validacion de ventana de prueba MFA.
+- Criterios de aceptacion:
+  - No dispatch sin mfa_verified_at valido.
+  - Auditoria required/passed/failed.
+- Dependencias: CP-04.
+
+CP-07 | Control-plane | Endpoint license gate
+- Prioridad: P0
+- Estimacion: S
+- Contexto: Bloquear ejecucion si licencia endpoint no esta activa.
+- Alcance:
+  - Validar al crear job y antes de dispatch.
+- Criterios de aceptacion:
+  - 403 con reason license_inactive.
+  - Audit event de denegacion.
+- Dependencias: CP-03.
+
+CP-08 | Control-plane | WS event pipeline
+- Prioridad: P1
+- Estimacion: M
+- Contexto: Publicar estado del job al controller.
+- Alcance:
+  - command.job.created/queued/started/progress/completed/failed/cancelled.
+- Criterios de aceptacion:
+  - Orden de eventos consistente.
+  - Retries idempotentes sin duplicados peligrosos.
+- Dependencias: CP-03.
+
+CP-09 | Control-plane | Audit trail command lifecycle
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Trazabilidad completa para compliance.
+- Alcance:
+  - Registrar eventos minimos definidos en plan.
+- Criterios de aceptacion:
+  - 100% transiciones clave con auditoria.
+  - Sin datos sensibles en claro.
+- Dependencias: CP-03, CP-04, CP-06.
+
+CP-10 | Control-plane | Retention + purge jobs
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Cumplir retencion 90 dias y purga automatica.
+- Alcance:
+  - Job diario de purga y reporte por tenant.
+- Criterios de aceptacion:
+  - Evidencia de purga > ventana.
+  - Digest y eventos base preservados segun policy.
+- Dependencias: CP-09.
+
+HA-01 | Host-agent | Command dispatcher
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Recibir, encolar y arrancar ejecucion de comandos.
+- Alcance:
+  - Dispatcher con slot control por endpoint.
+- Criterios de aceptacion:
+  - No perdida de jobs en reconexion breve.
+  - Estado running sincronizado con control-plane.
+- Dependencias: CP-08.
+
+HA-02 | Host-agent | Command runner adapters
+- Prioridad: P0
+- Estimacion: L
+- Contexto: Ejecucion por catalogo, sin shell interactiva libre.
+- Alcance:
+  - Adaptadores para comandos V1 priorizados.
+  - Ejecucion least privilege.
+- Criterios de aceptacion:
+  - 3 comandos funcionales end-to-end.
+  - No bypass de validacion de parametros.
+- Dependencias: HA-01, CP-05.
+
+HA-03 | Host-agent | Output streaming
+- Prioridad: P1
+- Estimacion: M
+- Contexto: Enviar stdout/stderr por chunks E2E.
+- Alcance:
+  - Chunk sequencing, output cap y digest.
+- Criterios de aceptacion:
+  - Stream estable en salida alta.
+  - Truncado controlado sin romper comando.
+- Dependencias: HA-02.
+
+HA-04 | Host-agent | Watchdog timeout/cancel
+- Prioridad: P0
+- Estimacion: M
+- Contexto: Evitar procesos colgados y cerrar por cancel.
+- Alcance:
+  - Timeout por policy.
+  - Graceful stop + force kill.
+- Criterios de aceptacion:
+  - Sin procesos huerfanos post-cancel.
+  - Estados finales coherentes.
+- Dependencias: HA-02.
+
+QA-01 | Security tests command engine
+- Prioridad: P0
+- Estimacion: L
+- Contexto: Validar resistencia ante abuso y bypass.
+- Alcance:
+  - injection, bypass MFA, bypass license, leak secrets.
+- Criterios de aceptacion:
+  - Casos criticos bloqueados.
+  - Reporte de riesgo residual.
+- Dependencias: CP-06, CP-07, HA-02.
+
+QA-02 | Resilience tests command engine
+- Prioridad: P1
+- Estimacion: M
+- Contexto: Validar comportamiento en fallas reales.
+- Alcance:
+  - reconexion, restart host, saturacion output, race cancel/finish.
+- Criterios de aceptacion:
+  - Sin estados huerfanos.
+  - Recovery documentado.
+- Dependencias: HA-04, HA-03.
+
+ORDEN MINIMO DE EJECUCION
+1. CP-01
+2. CP-02
+3. CP-03
+4. CP-04
+5. CP-05
+6. CP-06
+7. CP-07
+8. CP-08
+9. HA-01
+10. HA-02
+11. HA-04
+12. HA-03
+13. CP-09
+14. CP-10
+15. QA-01
+16. QA-02
+
+CRITERIO DE ARRANQUE DE DESARROLLO
+- Completar CP-01..CP-04 antes de iniciar ejecucion real en host-agent.
+- Bloquear merge de comandos high risk hasta tener CP-06 y QA-01 en verde.

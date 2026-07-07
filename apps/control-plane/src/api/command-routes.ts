@@ -1,0 +1,821 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+
+import { findCatalogCommand, COMMAND_CATALOG } from "../domain/command-catalog.js";
+import { validateCommandParams } from "../domain/command-param-schema.js";
+import {
+  assertTransition,
+  type CommandJobStatus,
+} from "../domain/command-job.js";
+import {
+  InMemoryCommandJobStore,
+  type CommandJobRecord,
+} from "../domain/command-job-store.js";
+import {
+  DEFAULT_COMMAND_POLICY,
+  evaluateCommandPolicy,
+  type EndpointLicenseStatus,
+  type OperatorRole,
+} from "../domain/command-policy.js";
+import { InMemoryMfaStepupStore } from "../domain/mfa-stepup.js";
+import { InMemoryCommandEventBus } from "../domain/command-event-bus.js";
+import {
+  InMemoryAuditLogStore,
+  type AuditEventCode,
+} from "../domain/audit-log-store.js";
+import {
+  CommandEventsWsHub,
+  registerCommandEventsWsRoute,
+} from "./command-events-ws.js";
+
+type CreateJobBody = {
+  tenantId: string;
+  endpointId: string;
+  operatorId: string;
+  catalogCommandId: string;
+  requestedParams?: Record<string, unknown>;
+};
+
+type IdParams = {
+  id: string;
+};
+
+type CreateMfaChallengeBody = {
+  tenantId: string;
+  operatorId: string;
+};
+
+type VerifyMfaChallengeBody = {
+  tenantId: string;
+  operatorId: string;
+  otp: string;
+};
+
+type AuditQuery = {
+  tenantId?: string;
+  operatorId?: string;
+};
+
+type PurgeBody = {
+  retentionDays?: number;
+};
+
+type RunJobBody = {
+  outcome?: "completed" | "failed";
+  failReason?: string;
+};
+
+const RETENTION_DAYS_DEFAULT = 90;
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const PRESERVE_AUDIT_CODES = [
+  "command.job.blocked",
+  "command.job.cancelled",
+  "command.mfa.challenge.failed",
+] as const;
+const PRESERVE_ENVELOPE_KINDS = ["command.abort", "command.exit"] as const;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseOperatorRole(value: unknown): OperatorRole {
+  if (value === "viewer" || value === "tech" || value === "admin") {
+    return value;
+  }
+  return "tech";
+}
+
+function parseEndpointLicenseStatus(value: unknown): EndpointLicenseStatus {
+  return value === "inactive" ? "inactive" : "active";
+}
+
+function parseActiveCommandCount(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
+}
+
+function parseMfaVerified(value: unknown): boolean {
+  return value === "true";
+}
+
+function lifecycleAuditCode(status: CommandJobStatus): AuditEventCode {
+  switch (status) {
+    case "policy_check":
+      return "command.job.policy_check";
+    case "mfa_pending":
+      return "command.job.mfa_pending";
+    case "queued":
+      return "command.job.queued";
+    case "dispatched":
+      return "command.job.dispatched";
+    case "running":
+      return "command.job.running";
+    case "streaming":
+      return "command.job.streaming";
+    case "verifying":
+      return "command.job.verifying";
+    case "completed":
+      return "command.job.completed";
+    case "failed":
+      return "command.job.failed";
+    case "blocked":
+      return "command.job.blocked";
+    case "cancelled":
+      return "command.job.cancelled";
+    case "created":
+      return "command.job.created";
+    default:
+      return "command.job.created";
+  }
+}
+
+export function registerCommandRoutes(app: FastifyInstance): void {
+  const store = new InMemoryCommandJobStore();
+  const mfaStore = new InMemoryMfaStepupStore();
+  const eventBus = new InMemoryCommandEventBus();
+  const auditStore = new InMemoryAuditLogStore(RETENTION_DAYS_DEFAULT);
+  const wsHub = new CommandEventsWsHub();
+  const detachWs = wsHub.attach(eventBus);
+
+  registerCommandEventsWsRoute(app, wsHub);
+
+  const runRetentionPurge = (retentionDays = RETENTION_DAYS_DEFAULT) => {
+    const auditReport = auditStore.purgeWithPolicy({
+      retentionDays,
+      preserveCodes: [...PRESERVE_AUDIT_CODES],
+    });
+    const eventReport = eventBus.purgeWithPolicy({
+      retentionDays,
+      preserveEnvelopeKinds: [...PRESERVE_ENVELOPE_KINDS],
+    });
+
+    const mergedByTenant: Record<string, number> = { ...auditReport.byTenant };
+    for (const [tenantId, count] of Object.entries(eventReport.byTenant)) {
+      mergedByTenant[tenantId] = (mergedByTenant[tenantId] ?? 0) + count;
+    }
+
+    return {
+      runAt: new Date().toISOString(),
+      retentionDays,
+      audit: auditReport,
+      eventPipeline: eventReport,
+      byTenant: mergedByTenant,
+      totalPurged:
+        auditReport.purged + eventReport.jobEventsPurged + eventReport.envelopesPurged,
+    };
+  };
+
+  const emitLifecycle = (
+    record: CommandJobRecord,
+    reason?: string,
+    extraDetails?: Record<string, unknown>,
+  ) => {
+    eventBus.emitTransition(record, reason ? { reason } : undefined);
+    auditStore.append({
+      tenantId: record.tenantId,
+      endpointId: record.endpointId,
+      operatorId: record.operatorId,
+      jobId: record.id,
+      code: lifecycleAuditCode(record.status),
+      details: {
+        commandId: record.catalogCommandId,
+        commandVersion: record.commandVersion,
+        riskLevel: record.riskLevel,
+        requiresMfa: record.requiresMfa,
+        reason,
+        requestedParams: record.requestedParams,
+        ...extraDetails,
+      },
+    });
+  };
+
+  const timer = setInterval(() => {
+    const report = runRetentionPurge(RETENTION_DAYS_DEFAULT);
+    app.log.info(
+      {
+        retentionDays: RETENTION_DAYS_DEFAULT,
+        totalPurged: report.totalPurged,
+        byTenant: report.byTenant,
+      },
+      "daily retention purge completed",
+    );
+  }, RETENTION_INTERVAL_MS);
+  timer.unref();
+
+  app.addHook("onClose", async () => {
+    clearInterval(timer);
+    detachWs();
+  });
+
+  app.post(
+    "/api/v1/mfa/challenges",
+    async (
+      req: FastifyRequest<{ Body: CreateMfaChallengeBody }>,
+      reply: FastifyReply,
+    ) => {
+      const body = req.body;
+      if (
+        !body ||
+        !isNonEmptyString(body.tenantId) ||
+        !isNonEmptyString(body.operatorId)
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId and operatorId are required",
+        });
+      }
+
+      const challenge = mfaStore.issueChallenge(body.tenantId, body.operatorId);
+      auditStore.append({
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        code: "command.mfa.challenge.issued",
+        details: {
+          challengeId: challenge.id,
+        },
+      });
+
+      return reply.code(201).send({
+        challengeId: challenge.id,
+        expiresAt: new Date(challenge.expiresAtMs).toISOString(),
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/mfa/challenges/:id/verify",
+    async (
+      req: FastifyRequest<{ Params: IdParams; Body: VerifyMfaChallengeBody }>,
+      reply: FastifyReply,
+    ) => {
+      const body = req.body;
+      if (
+        !body ||
+        !isNonEmptyString(body.tenantId) ||
+        !isNonEmptyString(body.operatorId) ||
+        !isNonEmptyString(body.otp)
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId, operatorId and otp are required",
+        });
+      }
+
+      const result = mfaStore.verifyChallenge(
+        req.params.id,
+        body.tenantId,
+        body.operatorId,
+        body.otp,
+      );
+
+      if (!result.ok) {
+        auditStore.append({
+          tenantId: body.tenantId,
+          operatorId: body.operatorId,
+          code: "command.mfa.challenge.failed",
+          details: {
+            challengeId: req.params.id,
+            reason: result.reason,
+            otp: body.otp,
+          },
+        });
+
+        return reply.code(403).send({
+          code: "mfa_verify_failed",
+          reason: result.reason,
+        });
+      }
+
+      auditStore.append({
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        code: "command.mfa.challenge.verified",
+        details: {
+          challengeId: req.params.id,
+          mfaToken: result.token,
+        },
+      });
+
+      return {
+        mfaToken: result.token,
+        expiresAt: result.expiresAt,
+      };
+    },
+  );
+
+  app.get("/api/v1/commands/catalog", async () => {
+    return { items: COMMAND_CATALOG };
+  });
+
+  app.get(
+    "/api/v1/audit",
+    async (
+      req: FastifyRequest<{ Querystring: AuditQuery }>,
+      reply: FastifyReply,
+    ) => {
+      const { tenantId, operatorId } = req.query;
+      if (!isNonEmptyString(tenantId)) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId is required",
+        });
+      }
+
+      return {
+        retentionDays: 90,
+        items: auditStore.find(
+          isNonEmptyString(operatorId)
+            ? { tenantId, operatorId }
+            : { tenantId },
+        ),
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/internal/retention/purge",
+    async (
+      req: FastifyRequest<{ Body: PurgeBody }>,
+      reply: FastifyReply,
+    ) => {
+      const body = req.body;
+      const requestedDays = body?.retentionDays;
+      const retentionDays =
+        typeof requestedDays === "number" &&
+        Number.isFinite(requestedDays) &&
+        requestedDays >= 0
+          ? Math.floor(requestedDays)
+          : RETENTION_DAYS_DEFAULT;
+
+      if (
+        requestedDays !== undefined &&
+        (!Number.isFinite(requestedDays) || requestedDays < 0)
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "retentionDays must be a number >= 0",
+        });
+      }
+
+      const report = runRetentionPurge(retentionDays);
+      return {
+        policy: {
+          retentionDays,
+          preserveAuditCodes: [...PRESERVE_AUDIT_CODES],
+          preserveEnvelopeKinds: [...PRESERVE_ENVELOPE_KINDS],
+        },
+        report,
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/commands/jobs",
+    async (
+      req: FastifyRequest<{ Body: CreateJobBody }>,
+      reply: FastifyReply,
+    ) => {
+      const body = req.body;
+      if (
+        !body ||
+        !isNonEmptyString(body.tenantId) ||
+        !isNonEmptyString(body.endpointId) ||
+        !isNonEmptyString(body.operatorId) ||
+        !isNonEmptyString(body.catalogCommandId)
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId, endpointId, operatorId and catalogCommandId are required",
+        });
+      }
+
+      const command = findCatalogCommand(body.catalogCommandId);
+      if (!command) {
+        return reply.code(422).send({
+          code: "unknown_command",
+          message: "catalogCommandId is not in the command catalog",
+        });
+      }
+
+      const requestedParams = body.requestedParams ?? {};
+      const paramValidation = validateCommandParams(
+        command.paramsSchema,
+        requestedParams,
+      );
+      if (!paramValidation.ok) {
+        return reply.code(422).send({
+          code: "invalid_command_params",
+          errors: paramValidation.errors,
+        });
+      }
+
+      const policyDecision = evaluateCommandPolicy(DEFAULT_COMMAND_POLICY, {
+        commandId: command.id,
+        riskLevel: command.riskLevel,
+        operatorRole: parseOperatorRole(req.headers["x-operator-role"]),
+        endpointLicenseStatus: parseEndpointLicenseStatus(
+          req.headers["x-endpoint-license-status"],
+        ),
+        activeCommandCountForEndpoint: parseActiveCommandCount(
+          req.headers["x-active-commands"],
+        ),
+        mfaVerified:
+          (typeof req.headers["x-mfa-token"] === "string" &&
+            mfaStore.validateToken(
+              req.headers["x-mfa-token"],
+              body.tenantId,
+              body.operatorId,
+            )) || parseMfaVerified(req.headers["x-mfa-verified"]),
+      });
+
+      let initialStatus: CommandJobStatus = "created";
+      const policyTransition = assertTransition(initialStatus, "policy_check");
+      if (policyTransition.ok) {
+        initialStatus = "policy_check";
+      }
+
+      if (policyDecision.decision === "deny") {
+        const blockedTransition = assertTransition(initialStatus, "blocked");
+        if (blockedTransition.ok) {
+          initialStatus = "blocked";
+        }
+
+        const blocked = store.create({
+          tenantId: body.tenantId,
+          endpointId: body.endpointId,
+          operatorId: body.operatorId,
+          catalogCommandId: command.id,
+          commandVersion: command.version,
+          requestedParams,
+          riskLevel: command.riskLevel,
+          requiresMfa: false,
+          status: initialStatus,
+        });
+
+        emitLifecycle(blocked, policyDecision.reason);
+        eventBus.emitAbort(blocked, policyDecision.reason);
+
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: policyDecision.reason,
+          id: blocked.id,
+          status: blocked.status,
+        });
+      }
+
+      if (policyDecision.decision === "stepup") {
+        const mfaTransition = assertTransition(initialStatus, "mfa_pending");
+        if (mfaTransition.ok) {
+          initialStatus = "mfa_pending";
+        }
+
+        const mfaPending = store.create({
+          tenantId: body.tenantId,
+          endpointId: body.endpointId,
+          operatorId: body.operatorId,
+          catalogCommandId: command.id,
+          commandVersion: command.version,
+          requestedParams,
+          riskLevel: command.riskLevel,
+          requiresMfa: true,
+          status: initialStatus,
+        });
+
+        emitLifecycle(mfaPending, policyDecision.reason);
+
+        return reply.code(202).send({
+          id: mfaPending.id,
+          status: mfaPending.status,
+          requiresMfa: mfaPending.requiresMfa,
+          reason: policyDecision.reason,
+          mfaRequired: true,
+        });
+      }
+
+      const queuedTransition = assertTransition(initialStatus, "queued");
+      if (queuedTransition.ok) {
+        initialStatus = "queued";
+      }
+
+      const created = store.create({
+        tenantId: body.tenantId,
+        endpointId: body.endpointId,
+        operatorId: body.operatorId,
+        catalogCommandId: command.id,
+        commandVersion: command.version,
+        requestedParams,
+        riskLevel: command.riskLevel,
+        requiresMfa: false,
+        status: initialStatus,
+      });
+
+      emitLifecycle(created);
+      eventBus.emitCommandInit(created);
+
+      return reply.code(201).send({
+        id: created.id,
+        status: created.status,
+        requiresMfa: created.requiresMfa,
+        riskLevel: created.riskLevel,
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/commands/jobs/:id",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+      return found;
+    },
+  );
+
+  app.post(
+    "/api/v1/commands/jobs/:id/cancel",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      const transition = assertTransition(found.status, "cancelled");
+      if (!transition.ok) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: `cannot transition from ${found.status} to cancelled`,
+        });
+      }
+
+      const updated = store.updateStatus(found.id, "cancelled")!;
+      eventBus.emitTransition(updated);
+      eventBus.emitAbort(updated, "cancelled_by_operator");
+      auditStore.append({
+        tenantId: updated.tenantId,
+        endpointId: updated.endpointId,
+        operatorId: updated.operatorId,
+        jobId: updated.id,
+        code: "command.job.cancelled",
+        details: {
+          commandId: updated.catalogCommandId,
+          commandVersion: updated.commandVersion,
+          requestedParams: updated.requestedParams,
+        },
+      });
+
+      return {
+        id: updated.id,
+        status: updated.status,
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/commands/jobs/:id/retry",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      if (found.status !== "failed" && found.status !== "cancelled") {
+        return reply.code(409).send({
+          code: "retry_not_allowed",
+          message: "retry is only allowed from failed or cancelled",
+        });
+      }
+
+      const updated = store.updateStatus(found.id, "queued")!;
+      eventBus.emitRetry(updated);
+      eventBus.emitTransition(updated);
+      eventBus.emitCommandInit(updated);
+      auditStore.append({
+        tenantId: updated.tenantId,
+        endpointId: updated.endpointId,
+        operatorId: updated.operatorId,
+        jobId: updated.id,
+        code: "command.job.retry",
+        details: {
+          fromStatus: found.status,
+          toStatus: updated.status,
+        },
+      });
+      auditStore.append({
+        tenantId: updated.tenantId,
+        endpointId: updated.endpointId,
+        operatorId: updated.operatorId,
+        jobId: updated.id,
+        code: "command.job.queued",
+        details: {
+          commandId: updated.catalogCommandId,
+          commandVersion: updated.commandVersion,
+        },
+      });
+
+      return {
+        id: updated.id,
+        status: updated.status,
+      };
+    },
+  );
+
+  app.post(
+    "/api/v1/internal/commands/jobs/:id/run",
+    async (
+      req: FastifyRequest<{ Params: IdParams; Body: RunJobBody }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      if (found.status !== "queued") {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "run simulation is only allowed from queued",
+        });
+      }
+
+      const outcome = req.body?.outcome === "failed" ? "failed" : "completed";
+      const failReason =
+        isNonEmptyString(req.body?.failReason) ? req.body.failReason : "runner_error";
+
+      let current = found;
+
+      const advance = (
+        target: CommandJobStatus,
+        reason?: string,
+        extraDetails?: Record<string, unknown>,
+      ) => {
+        const transition = assertTransition(current.status, target);
+        if (!transition.ok) {
+          return undefined;
+        }
+
+        const updated = store.updateStatus(current.id, target);
+        if (!updated) {
+          return undefined;
+        }
+
+        current = updated;
+        emitLifecycle(updated, reason, extraDetails);
+        return updated;
+      };
+
+      if (!advance("dispatched", undefined, { progressPercent: 0 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot dispatch command job",
+        });
+      }
+
+      if (!advance("running", undefined, { progressPercent: 10 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot mark command job as running",
+        });
+      }
+
+      eventBus.emitStdout(current, "runner: started");
+
+      if (!advance("streaming", undefined, { progressPercent: 60 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot mark command job as streaming",
+        });
+      }
+
+      if (outcome === "failed") {
+        eventBus.emitStderr(current, `runner failed: ${failReason}`);
+
+        if (!advance("failed", failReason, { progressPercent: 100 })) {
+          return reply.code(409).send({
+            code: "invalid_state_transition",
+            message: "cannot fail command job",
+          });
+        }
+
+        eventBus.emitExit(current, 1);
+        eventBus.emitAbort(current, failReason);
+
+        return {
+          id: current.id,
+          status: current.status,
+          outcome,
+          exitCode: 1,
+        };
+      }
+
+      eventBus.emitStdout(current, "runner: processing complete");
+
+      if (!advance("verifying", undefined, { progressPercent: 90 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot mark command job as verifying",
+        });
+      }
+
+      if (!advance("completed", undefined, { progressPercent: 100 })) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "cannot complete command job",
+        });
+      }
+
+      eventBus.emitExit(current, 0);
+
+      return {
+        id: current.id,
+        status: current.status,
+        outcome,
+        exitCode: 0,
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/commands/jobs/:id/events",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      return {
+        items: eventBus.getEvents(found.id),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/commands/jobs/:id/channel-messages",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      return {
+        items: eventBus.getEnvelopes(found.id),
+      };
+    },
+  );
+
+  app.get(
+    "/api/v1/commands/jobs/:id/audit",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "command job not found",
+        });
+      }
+
+      return {
+        retentionDays: 90,
+        items: auditStore.getByJobId(found.id),
+      };
+    },
+  );
+}

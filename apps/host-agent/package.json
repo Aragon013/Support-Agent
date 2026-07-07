@@ -1,0 +1,27 @@
+{
+  "name": "@remotesupportpro/host-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --loader ts-node/esm src/agent.ts",
+    "start": "node dist/agent.js",
+    "start:config": "node dist/agent.js --config",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "service:install": "powershell -ExecutionPolicy Bypass -File ./scripts/install-windows-service.ps1",
+    "service:uninstall": "powershell -ExecutionPolicy Bypass -File ./scripts/uninstall-windows-service.ps1",
+    "service:start": "powershell -ExecutionPolicy Bypass -File ./scripts/start-windows-service.ps1",
+    "service:stop": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-windows-service.ps1"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/ws": "^8.5.13",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

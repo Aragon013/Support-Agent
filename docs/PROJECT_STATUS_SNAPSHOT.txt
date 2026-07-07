@@ -6,9 +6,14 @@ Estado actual:
 - GitHub conectado y actualizado.
 - Regla de no-release definida.
 - Modulo Auth + Tenant + Roles listo como documento de diseno.
+- Modulo Session + Signaling listo como documento de diseno.
+- Modulo Host Agent listo como documento de diseno.
+- Modulo File Transfer listo como documento de diseno.
+- Modulo Command Engine listo como documento de diseno + backlog implementable.
+- Baseline implementado en control-plane: CP-01, CP-02, CP-03, CP-04, CP-05, CP-06, CP-07 (build+tests green).
 
 Pendiente inmediato:
-- Modulo Session + Signaling.
+- Implementacion del modulo Command Engine por slices (A-E) segun backlog tecnico.
 
 Restricciones fijas:
 - E2E obligatorio.
@@ -19,4 +24,4 @@ Restricciones fijas:
 - Controller con Electron.
 
 Siguiente accion unica:
-- Disenar Session + Signaling.
+- Ejecutar A-04 y D-01 (eventos WS/DataChannel + auditoria de ciclo completo).

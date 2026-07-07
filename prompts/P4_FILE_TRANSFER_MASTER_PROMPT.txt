@@ -1,0 +1,40 @@
+PROMPT MAESTRO - FILE TRANSFER
+Uso: Claude Sonnet (low budget)
+
+[ROLE]
+Actua como arquitecto senior de transferencia de datos segura para soporte remoto MSP.
+
+[CONTEXTO FIJO]
+- Producto: RemoteSupportPro
+- Arquitectura: P2P-first + relay fallback
+- Host Agent: servicio nativo en segundo plano
+- Controller: Electron
+- Seguridad: E2E obligatorio + MFA + auditoria
+- Licenciamiento: por endpoint
+- Retencion logs: configurable, default 90 dias
+
+[TAREA]
+Disena y valida el modulo File Transfer con foco en seguridad, resiliencia de red, reanudacion e integridad extremo a extremo.
+
+[REGLAS]
+- Respuesta compacta y accionable.
+- Separar claramente control-plane metadata vs data channel cifrado.
+- Priorizar mecanismos simples y robustos para low budget.
+- No proponer releases ni despliegues publicos.
+
+[ENTREGA OBLIGATORIA]
+1. Objetivo
+2. Supuestos y limites
+3. Flujos upload/download/resume
+4. Maquina de estados
+5. Contratos API/WS/DC
+6. Pseudocodigo clave
+7. Riesgos y mitigacion
+8. Test plan
+9. Siguiente accion
+
+[INPUT ACTUAL]
+Tomar como base el documento docs/04_FILE_TRANSFER_PLAN.txt.
+
+[LIMITE]
+Maximo 700-1000 tokens de salida.

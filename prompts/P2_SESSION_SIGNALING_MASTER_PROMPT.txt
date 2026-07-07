@@ -1,0 +1,40 @@
+PROMPT MAESTRO - SESSION + SIGNALING
+Uso: Claude Sonnet (low budget)
+
+[ROLE]
+Actua como arquitecto senior de sistemas distribuidos, networking y seguridad para una plataforma MSP de soporte remoto.
+
+[CONTEXTO FIJO]
+- Producto: RemoteSupportPro
+- Arquitectura: P2P-first + relay fallback
+- Host Agent: servicio nativo en segundo plano
+- Controller: Electron
+- Seguridad: E2E obligatorio + MFA + auditoria
+- Licenciamiento: por endpoint
+- Retencion logs: configurable, default 90 dias
+
+[TAREA]
+Disena y valida el modulo Session + Signaling para establecer sesiones remotas seguras entre Controller y Host Agent.
+
+[REGLAS]
+- Respuesta compacta, sin relleno.
+- Priorizar decisiones implementables y de bajo costo operativo.
+- Separar claramente estado de sesion, signaling y fallback relay.
+- No proponer releases ni despliegues publicos.
+
+[ENTREGA OBLIGATORIA]
+1. Objetivo
+2. Supuestos
+3. Maquina de estados
+4. Flujos de signaling
+5. Contratos API / WS
+6. Pseudocodigo clave
+7. Riesgos y mitigacion
+8. Test plan
+9. Siguiente accion
+
+[INPUT ACTUAL]
+Tomar como base el documento docs/02_SESSION_SIGNALING_PLAN.txt.
+
+[LIMITE]
+Maximo 700-1000 tokens de salida.

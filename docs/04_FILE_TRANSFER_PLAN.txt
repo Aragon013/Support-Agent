@@ -1,0 +1,298 @@
+FILE TRANSFER - PLAN TECNICO V1
+Fecha: 2026-07-06
+Estado: Ready para implementacion
+
+1) OBJETIVO
+Disenar un modulo de transferencia de archivos seguro, auditable y eficiente para sesiones remotas MSP, con compatibilidad en redes restringidas y control estricto por politicas del tenant.
+
+2) ALCANCE DEL MODULO
+- Transferencia upload/download entre Controller y Host Agent.
+- Cola de transferencias por sesion.
+- Reanudacion de transferencias interrumpidas.
+- Verificacion de integridad por chunk y por archivo.
+- Politicas por tenant/endpoint (permitir, denegar, tamano maximo, extensiones).
+- Auditoria completa de operaciones de archivo.
+- Integracion con Session + Signaling y Host Agent.
+
+Fuera de alcance en este modulo:
+- Sincronizacion bidireccional de carpetas continua.
+- Versionado documental avanzado.
+- DLP empresarial completo con clasificadores ML.
+
+3) SUPUESTOS Y LIMITES
+- Transferencias via canal de datos de sesion (P2P-first, relay fallback).
+- E2E obligatorio para datos de archivo en transito.
+- Control-plane coordina metadata/estado, no inspecciona contenido cifrado.
+- Host Agent aplica politicas locales antes de escribir/leer en disco.
+- Licencia endpoint valida es requisito para iniciar transferencias.
+
+4) FLUJOS FUNCIONALES
+4.1 Upload (Controller -> Host)
+- Operador selecciona archivo(s) y destino remoto.
+- Controller solicita create-transfer al control-plane con session_id.
+- Host Agent valida politica y permisos de ruta destino.
+- Se negocia plan de chunks y se inicia stream cifrado.
+- Al finalizar, Host confirma hash final y estado completed.
+
+4.2 Download (Host -> Controller)
+- Operador solicita archivo/ruta remota.
+- Host valida acceso local y politica.
+- Se transfiere por chunks con ack por ventana.
+- Controller valida hash final y persiste archivo.
+
+4.3 Reanudacion
+- Si hay corte de red, la transferencia queda paused/interrupted.
+- Reconexion permite resume desde ultimo chunk confirmado.
+- No se reenvian chunks confirmados salvo mismatch de integridad.
+
+4.4 Cancelacion
+- Operador o Host puede cancelar.
+- Estado final cancelled con motivo estandarizado.
+- Limpiar archivos temporales parciales segun politica.
+
+5) MAQUINA DE ESTADOS DE TRANSFERENCIA
+- created
+- queued
+- policy_check
+- negotiating
+- in_progress
+- paused
+- resuming
+- verifying
+- completed
+- failed
+- cancelled
+
+Reglas clave:
+- created -> queued al aceptar solicitud inicial.
+- queued -> policy_check antes de abrir stream.
+- policy_check -> negotiating si permitido.
+- negotiating -> in_progress cuando ambos extremos confirman plan.
+- in_progress -> paused por corte temporal.
+- paused -> resuming en reconexion valida.
+- in_progress/resuming -> verifying al terminar ultimo chunk.
+- verifying -> completed si hashes validos.
+- cualquier estado activo -> failed/cancelled por error o cancelacion.
+
+6) CONTRATOS Y EVENTOS (V1)
+6.1 HTTP
+POST /api/v1/transfers
+GET  /api/v1/transfers/{id}
+POST /api/v1/transfers/{id}/pause
+POST /api/v1/transfers/{id}/resume
+POST /api/v1/transfers/{id}/cancel
+
+6.2 WebSocket eventos
+- transfer.created
+- transfer.policy.denied
+- transfer.negotiated
+- transfer.chunk.sent
+- transfer.chunk.acked
+- transfer.progress
+- transfer.paused
+- transfer.resumed
+- transfer.verifying
+- transfer.completed
+- transfer.failed
+- transfer.cancelled
+
+6.3 Data channel mensajes
+- transfer.init
+- transfer.chunk
+- transfer.ack
+- transfer.nack
+- transfer.end
+- transfer.abort
+
+7) MODELO DE DATOS (MINIMO)
+Tabla file_transfers:
+- id (uuid pk)
+- tenant_id
+- session_id
+- endpoint_id
+- operator_id
+- direction (upload|download)
+- src_path_masked
+- dst_path_masked
+- file_name
+- file_size_bytes
+- status
+- bytes_transferred
+- chunk_size
+- total_chunks
+- hash_alg (sha256)
+- file_hash_expected (nullable)
+- file_hash_actual (nullable)
+- created_at
+- started_at (nullable)
+- completed_at (nullable)
+- failed_reason (nullable)
+
+Tabla file_transfer_chunks:
+- id (uuid pk)
+- transfer_id
+- chunk_index
+- offset_bytes
+- size_bytes
+- chunk_hash
+- acked (bool)
+- sent_at
+- acked_at (nullable)
+
+Tabla file_transfer_policy_logs:
+- id (uuid pk)
+- transfer_id
+- policy_rule
+- decision (allow|deny)
+- reason
+- created_at
+
+Tabla audit_logs (reuso):
+- id
+- tenant_id
+- operator_id
+- endpoint_id
+- session_id
+- event_type
+- event_meta_json
+- created_at
+
+8) POLITICAS DE SEGURIDAD
+8.1 Policy gates
+- allow_file_transfer (bool)
+- max_file_size_mb
+- blocked_extensions
+- blocked_paths
+- allowed_paths (opcional)
+- require_operator_role (admin|tech)
+
+8.2 Validaciones obligatorias
+- Normalizar y validar rutas (evitar path traversal).
+- Rechazar nombres reservados o invalidos por OS.
+- Rechazar symlink/junction no permitido por policy.
+- En upload, escribir primero a archivo temporal y hacer atomic rename al verificar.
+
+8.3 Integridad
+- Hash por chunk + hash final de archivo.
+- NACK si hash de chunk no coincide.
+- Fail si hay N reintentos por chunk excedidos.
+
+8.4 Cifrado y privacidad
+- Cifrado E2E del stream.
+- Logs sin contenido de archivo ni rutas sensibles en claro.
+- Mascar rutas en auditoria y UI de logs.
+
+9) ESTRATEGIA DE TRANSFERENCIA
+- Chunk size inicial: 256 KB configurable.
+- Ventana de envio (sliding window) para throughput estable.
+- Control de congestion simple: reducir ventana ante perdida, ampliar gradualmente en estabilidad.
+- Backpressure si Host o Controller no pueden escribir a disco al ritmo de red.
+
+10) PSEUDOCODIGO CLAVE
+10.1 createTransfer(req)
+- assert role in {admin, tech}
+- assert session active and tenant match
+- assert endpoint license active
+- apply transfer policy
+- if denied: audit + return 403
+- insert file_transfers status=queued
+- emit transfer.created
+- return transfer_id
+
+10.2 startTransfer(transfer_id)
+- set status=policy_check
+- if !hostPolicyAllows(): fail policy_denied
+- negotiate chunk_size, window, resume_offset
+- set status=in_progress
+- while chunks remain:
+  - send chunk
+  - wait ack/nack
+  - on nack retry up to limit
+  - update progress
+- set status=verifying
+- if finalHashOk: completed else failed
+
+10.3 resumeTransfer(transfer_id)
+- load last acked chunk
+- set status=resuming
+- continue from next chunk
+- preserve same transfer_id and audit chain
+
+10.4 handleWriteOnHost(chunk)
+- validate transfer/session/policy
+- validate chunk hash
+- write temp file at offset
+- fsync strategy per threshold
+- ack chunk
+
+11) REQUISITOS NO FUNCIONALES
+- p95 create-transfer < 300 ms.
+- Upload/download robusto en redes inestables.
+- Soportar archivos grandes (umbral exacto configurable por policy).
+- Sin consumo excesivo de RAM (streaming/chunks, no cargar archivo completo).
+- Observabilidad de progreso y fallos en tiempo real.
+
+12) RIESGOS Y MITIGACIONES
+- Riesgo: exfiltracion de datos via transfer.
+  - Mitigacion: policy estricta, roles, auditoria, consentimiento opcional.
+- Riesgo: path traversal/escritura arbitraria.
+  - Mitigacion: canonicalizacion y allowlist de rutas.
+- Riesgo: corrupcion por cortes de red.
+  - Mitigacion: chunks con hash, resume y verificacion final.
+- Riesgo: costo alto en relay.
+  - Mitigacion: p2p-first, limite de tasa y alertas por uso relay.
+- Riesgo: malware transferido.
+  - Mitigacion: hooks de escaneo opcional y bloqueo por extension/policy.
+
+13) POLITICA DE AUDITORIA
+Registrar al menos:
+- transfer.create.requested
+- transfer.policy.allowed
+- transfer.policy.denied
+- transfer.started
+- transfer.paused
+- transfer.resumed
+- transfer.completed
+- transfer.failed
+- transfer.cancelled
+- transfer.integrity.failed
+
+14) CRITERIOS DE ACEPTACION
+- Upload y download funcionan en sesion activa autorizada.
+- Policy deny bloquea transferencia y deja audit claro.
+- Resume funciona tras corte de red sin duplicar chunks ya confirmados.
+- Verificacion de hash final obligatoria antes de completed.
+- Auditoria y progreso visibles para soporte.
+
+15) PLAN DE TESTS
+Unit tests:
+- path validator
+- policy evaluator
+- chunk hash verifier
+- resume offset calculator
+
+Integration tests:
+- upload happy path
+- download happy path
+- policy deny by extension
+- network drop + resume success
+- hash mismatch + retry/fail
+- cancel transfer mid-stream
+
+Security tests:
+- path traversal attempts
+- oversized file bypass
+- replay chunk injection
+- cross-tenant transfer access denied
+
+16) LOW BUDGET TOKEN MODE
+- Cambios menores de campos/eventos: MINOR
+- Diseno de estado, contratos y pseudocodigo: MEDIUM
+- Hardening de rutas, integridad y abuso de canal: MAX
+
+17) DEFINITION OF DONE
+- Documento tecnico aprobado para File Transfer.
+- Contratos API/WS/DC definidos.
+- Maquina de estados implementable sin ambiguedad.
+- Politicas y validaciones de seguridad definidas.
+- Plan de tests base acordado.

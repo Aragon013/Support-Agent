@@ -1,0 +1,274 @@
+COMMAND ENGINE - BACKLOG TECNICO IMPLEMENTABLE V1
+Fecha: 2026-07-06
+Base: docs/05_COMMAND_ENGINE_PLAN.txt
+Estado: Ready para ejecucion por tickets
+
+Convenciones
+- Prioridad: P0 (bloqueante), P1 (alta), P2 (media), P3 (baja).
+- Esfuerzo estimado: S (0.5-1 dia), M (1-2 dias), L (3-5 dias).
+- DoD = Definition of Done del ticket.
+- Restricciones globales aplican a todos los tickets: E2E, MFA step-up, logs 90d, licencia endpoint, no-release.
+
+SLICE A - Dominio y contratos
+Objetivo: establecer base estable de entidades, estados, APIs y eventos.
+
+A-01 | Modelo de dominio command_job [BASELINE LISTO]
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: ninguna
+- Alcance:
+  - Definir estados del job y transiciones validas.
+  - Definir enumeraciones risk_level, stream_type, fail_reason.
+  - Definir reglas de negocio core (timeout cap, output cap).
+- DoD:
+  - State machine validada por tests unitarios.
+  - Documento de transiciones incluido en codigo.
+
+A-02 | Migraciones DB iniciales [BASELINE SQL LISTO]
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: A-01
+- Alcance:
+  - Crear tablas command_jobs, command_attempts, command_output_chunks, command_policy_logs.
+  - Indices por tenant_id, endpoint_id, status, created_at.
+- DoD:
+  - Migracion up/down funcional en entorno local.
+  - Indices cubren consultas p95 de listado y detalle.
+
+A-03 | API HTTP V1 [BASELINE FUNCIONAL LISTO]
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: A-01, A-02
+- Alcance:
+  - POST /api/v1/commands/jobs
+  - GET /api/v1/commands/jobs/{id}
+  - POST /api/v1/commands/jobs/{id}/cancel
+  - POST /api/v1/commands/jobs/{id}/retry
+  - GET /api/v1/commands/catalog
+- DoD:
+  - Contratos OpenAPI definidos.
+  - Errores estandar (403 policy/license, 409 state conflict, 422 schema).
+
+A-04 | Eventos WS y mensajes Data Channel
+- Prioridad: P1
+- Esfuerzo: M
+- Dependencias: A-03
+- Alcance:
+  - Emitir eventos command.job.* de ciclo completo.
+  - Definir envelopes command.init/stdout/stderr/exit/abort.
+- DoD:
+  - Trazas de sesion muestran orden correcto de eventos.
+  - Mensajes versionados (v1) para compatibilidad futura.
+
+SLICE B - Policy + MFA gate
+Objetivo: bloquear ejecuciones no autorizadas y elevar autenticacion cuando aplique.
+
+B-01 | Policy evaluator Command Engine [BASELINE FUNCIONAL LISTO]
+- Prioridad: P0
+- Esfuerzo: L
+- Dependencias: A-01, A-02
+- Alcance:
+  - Evaluar allow_remote_command, allowed/blocked command ids.
+  - Evaluar role threshold por risk.
+  - Evaluar max_run_seconds, max_output_bytes, concurrencia endpoint.
+- DoD:
+  - Cobertura de tests de policy >= 90% ramas criticas.
+  - Resultado explicito: allow | deny | stepup.
+
+B-02 | Schema validator de parametros [BASELINE FUNCIONAL LISTO]
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: A-03
+- Alcance:
+  - Validar tipos, rangos, regex, enums por command_id versionado.
+  - Rechazar parametros extra o ambiguos.
+- DoD:
+  - 100% de comandos catalogados tienen schema.
+  - Error 422 detallado por campo.
+
+B-03 | Integracion MFA step-up [BASELINE FUNCIONAL LISTO]
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: B-01
+- Alcance:
+  - Si risk requiere step-up, marcar mfa_pending y lanzar challenge.
+  - Reusar challenge solo dentro de ventana corta configurada.
+- DoD:
+  - Audit trail completo: required/passed/failed.
+  - No se puede dispatch sin mfa_verified_at valido.
+
+B-04 | Gates por licencia endpoint [BASELINE FUNCIONAL LISTO]
+- Prioridad: P0
+- Esfuerzo: S
+- Dependencias: A-03
+- Alcance:
+  - Verificar licencia activa al crear job.
+  - Revalidar antes de dispatch si hubo cola.
+- DoD:
+  - Respuesta 403 con motivo license_inactive.
+  - Evento de auditoria command.policy.denied por licencia.
+
+SLICE C - Host execution pipeline
+Objetivo: ejecutar comandos de forma segura, controlada y observable.
+
+C-01 | CommandDispatcher en host-agent
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: A-04, B-01, B-03
+- Alcance:
+  - Recepcion de command.init cifrado.
+  - Reserva de slot segun concurrencia.
+  - Transicion dispatched -> running.
+- DoD:
+  - Cola endpoint estable en carga moderada.
+  - Sin perdida de jobs en reconexion breve.
+
+C-02 | CommandRunner por catalogo
+- Prioridad: P0
+- Esfuerzo: L
+- Dependencias: C-01, B-02
+- Alcance:
+  - Ejecutar handlers dedicados por command_id.
+  - Prohibir shell libre interactiva en V1.
+  - Aplicar least privilege y entorno controlado.
+- DoD:
+  - Demo de 3 comandos (diagnostic, maintenance, security-safe).
+  - Intentos de injection bloqueados por diseno.
+
+C-03 | OutputStreamer con caps
+- Prioridad: P1
+- Esfuerzo: M
+- Dependencias: C-02
+- Alcance:
+  - Stream stdout/stderr por chunks secuenciales.
+  - Aplicar max_output_bytes y truncado controlado.
+  - Calcular digest sha256 del output total.
+- DoD:
+  - UI recibe stream incremental y exit final.
+  - Si supera cap: marca truncado sin romper job.
+
+C-04 | Cancelacion, timeout y watchdog
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: C-02
+- Alcance:
+  - Cancelacion operador: graceful stop + kill forzado.
+  - Timeout runtime por policy.
+  - Limpieza de procesos huerfanos y temporales.
+- DoD:
+  - Tests de race cancel/finish estables.
+  - Estado final coherente (cancelled o failed_timeout).
+
+SLICE D - Auditoria, retencion y observabilidad
+Objetivo: trazabilidad completa y operacion medible.
+
+D-01 | Auditoria de ciclo completo
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: A-03, B-01, C-04
+- Alcance:
+  - Emitir eventos de auditoria minimos definidos en plan.
+  - Guardar metadatos utiles sin secretos.
+- DoD:
+  - 100% de transiciones clave con audit event.
+  - Validacion de redaccion en eventos sensibles.
+
+D-02 | Retencion 90 dias + purga
+- Prioridad: P0
+- Esfuerzo: M
+- Dependencias: D-01
+- Alcance:
+  - Job de purga diaria para audit/policy/output segun reglas.
+  - Reporte de purga por tenant.
+- DoD:
+  - Prueba controlada confirma borrado > ventana.
+  - Evidencia de cumplimiento 90 dias para auditoria.
+
+D-03 | Metricas y SLO iniciales
+- Prioridad: P1
+- Esfuerzo: M
+- Dependencias: C-03, D-01
+- Alcance:
+  - Medir p95 create, p95 dispatch->start, success ratio.
+  - Medir deny ratio, timeout ratio, cancel ratio.
+- DoD:
+  - Dashboard minimo operativo (interno).
+  - Alertas basicas en degradacion.
+
+SLICE E - Hardening y calidad final de fase
+Objetivo: reducir riesgos de seguridad y fallas operativas antes de cierre de modulo.
+
+E-01 | Security test pack
+- Prioridad: P0
+- Esfuerzo: L
+- Dependencias: B-02, C-02, D-01
+- Alcance:
+  - Casos de command injection, bypass MFA, bypass licencia.
+  - Verificar no filtrado de secretos en output/audit.
+- DoD:
+  - Todos los casos criticos bloqueados o mitigados.
+  - Informe de riesgos remanentes documentado.
+
+E-02 | Resilience test pack
+- Prioridad: P1
+- Esfuerzo: M
+- Dependencias: C-01, C-04
+- Alcance:
+  - Simular reconexion, host restart, saturacion output.
+  - Validar consistencia de estados y reintentos.
+- DoD:
+  - Sin estados huerfanos tras escenarios de fallo.
+  - Recovery path documentado.
+
+E-03 | Cierre tecnico de modulo
+- Prioridad: P0
+- Esfuerzo: S
+- Dependencias: A-01..E-02
+- Alcance:
+  - Checklist final de criterios de aceptacion.
+  - Actualizar snapshot de estado y siguiente modulo.
+- DoD:
+  - Modulo marcado como cerrado a nivel de diseno+implementacion base interna.
+  - Snapshot apto para clear de chat.
+
+BACKLOG MINIMO (orden recomendado)
+1. A-01
+2. A-02
+3. A-03
+4. B-01
+5. B-02
+6. B-03
+7. B-04
+8. A-04
+9. C-01
+10. C-02
+11. C-04
+12. C-03
+13. D-01
+14. D-02
+15. D-03
+16. E-01
+17. E-02
+18. E-03
+
+DEPENDENCIAS CRITICAS
+- Sin B-01/B-03 no se habilita ejecucion real de high risk.
+- Sin C-04 no se considera seguro para operacion continua.
+- Sin D-02 no hay cumplimiento formal de retencion.
+
+RIESGOS DE EJECUCION DEL BACKLOG
+- Scope creep en comandos custom del tenant.
+  - Control: congelar catalogo V1 y versionar extensiones.
+- Sobrecarga por output excesivo.
+  - Control: caps estrictos + truncado + digest.
+- Acoplamiento fuerte control-plane/host.
+  - Control: contratos versionados y adaptadores estables.
+
+CRITERIO DE CIERRE DE FASE 5
+- Todos los tickets P0 completados.
+- Al menos 80% de P1 completados.
+- Test packs E-01 y E-02 ejecutados con resultados aceptables.
+- Snapshot de estado actualizado y listo para clear eficiente.
+
+SIGUIENTE ACCION RECOMENDADA
+- Generar tickets concretos por app (apps/control-plane y apps/host-agent) con formato issue-ready, estimacion y owner sugerido.
