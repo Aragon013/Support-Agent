@@ -34,6 +34,25 @@ type SessionView = {
   updatedAt: string;
 };
 
+type SessionSignalMessageType =
+  | "signal.offer"
+  | "signal.answer"
+  | "signal.ice-candidate"
+  | "control.input"
+  | "clipboard.sync"
+  | "screen.frame.stub";
+
+type SessionSignalMessage = {
+  id: string;
+  seq: number;
+  sessionId: string;
+  tenantId: string;
+  senderType: "controller" | "host";
+  messageType: SessionSignalMessageType;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
 const STATUS_COLOR: Record<SessionStatus, string> = {
   requested: "text-slate-300",
   pending_host: "text-slate-300",
@@ -57,10 +76,15 @@ export function SessionsPanel() {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [signalWsConnected, setSignalWsConnected] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [signalBusy, setSignalBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [signalError, setSignalError] = useState<string | null>(null);
+  const [signalMessages, setSignalMessages] = useState<SessionSignalMessage[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const signalWsRef = useRef<WebSocket | null>(null);
 
   const selected = useMemo(
     () => sessions.find((s) => s.sessionId === selectedId) ?? null,
@@ -119,6 +143,52 @@ export function SessionsPanel() {
       ws.close();
     };
   }, [tenantId]);
+
+  useEffect(() => {
+    setSignalMessages([]);
+    setSignalError(null);
+    setSignalWsConnected(false);
+
+    signalWsRef.current?.close();
+    signalWsRef.current = null;
+
+    if (!selectedId) {
+      return;
+    }
+
+    const ws = new WebSocket(
+      `ws://localhost:3000/api/v1/sessions/${selectedId}/signal/ws?tenantId=${encodeURIComponent(tenantId)}&participantType=controller`,
+    );
+
+    signalWsRef.current = ws;
+    ws.onopen = () => setSignalWsConnected(true);
+    ws.onclose = () => setSignalWsConnected(false);
+    ws.onerror = () => {
+      setSignalWsConnected(false);
+      setSignalError("signal websocket disconnected");
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const frame = JSON.parse(ev.data as string) as {
+          type: string;
+          message?: SessionSignalMessage;
+        };
+
+        if (frame.type !== "session.signal" || !frame.message) {
+          return;
+        }
+
+        setSignalMessages((prev) => [frame.message!, ...prev].slice(0, 150));
+      } catch {
+        // ignore malformed frames
+      }
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [selectedId, tenantId]);
 
   const createSession = async () => {
     setBusy(true);
@@ -217,6 +287,48 @@ export function SessionsPanel() {
     }
   };
 
+  const sendSignal = async (
+    messageType: SessionSignalMessageType,
+    payload: Record<string, unknown>,
+  ) => {
+    if (!selected) {
+      return;
+    }
+
+    setSignalBusy(true);
+    setSignalError(null);
+    try {
+      const res = await fetch(
+        `http://localhost:3000/api/v1/sessions/${selected.sessionId}/signal`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            senderType: "controller",
+            messageType,
+            payload,
+          }),
+        },
+      );
+
+      if (!res.ok) {
+        const body = await res.json() as { code?: string; message?: string };
+        throw new Error(body.message ?? body.code ?? `http_${res.status}`);
+      }
+    } catch (e) {
+      setSignalError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSignalBusy(false);
+    }
+  };
+
+  const isActiveSession =
+    selected?.status !== undefined &&
+    selected.status !== "ended" &&
+    selected.status !== "failed";
+
   return (
     <div className="flex flex-col gap-5 p-6">
       <div className="flex items-center justify-between">
@@ -301,6 +413,100 @@ export function SessionsPanel() {
           {error}
         </div>
       )}
+
+      <div className="rounded-xl border border-surface-800 bg-surface-900/70 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Session Signaling</h3>
+            <p className="text-xs text-slate-400 mt-0.5">WS + HTTP stub channel for offer/ice/input/clipboard</p>
+          </div>
+          <div className={cn("flex items-center gap-1.5 text-xs font-medium", signalWsConnected ? "text-success" : "text-slate-500")}>
+            {signalWsConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+            {signalWsConnected ? "Signal WS Connected" : "Signal WS Disconnected"}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 mb-3">
+          <button
+            onClick={() =>
+              sendSignal("signal.offer", {
+                sdp: "v=0\\no=- 0 0 IN IP4 127.0.0.1\\ns=RemoteSupportPro\\nt=0 0",
+                media: "stub",
+              })
+            }
+            disabled={signalBusy || !selected || !isActiveSession}
+            className="px-3 py-1.5 rounded-lg bg-brand/20 border border-brand/40 text-brand text-xs font-semibold disabled:opacity-50"
+          >
+            Send Offer
+          </button>
+          <button
+            onClick={() =>
+              sendSignal("signal.ice-candidate", {
+                candidate: "candidate:0 1 UDP 2122252543 192.168.1.10 55000 typ host",
+                sdpMid: "0",
+                sdpMLineIndex: 0,
+              })
+            }
+            disabled={signalBusy || !selected || !isActiveSession}
+            className="px-3 py-1.5 rounded-lg bg-accent/20 border border-accent/40 text-accent text-xs font-semibold disabled:opacity-50"
+          >
+            Send ICE
+          </button>
+          <button
+            onClick={() =>
+              sendSignal("control.input", {
+                action: "mouse.move",
+                x: 320,
+                y: 180,
+              })
+            }
+            disabled={signalBusy || !selected || !isActiveSession}
+            className="px-3 py-1.5 rounded-lg bg-warn/20 border border-warn/40 text-warn text-xs font-semibold disabled:opacity-50"
+          >
+            Send Input
+          </button>
+          <button
+            onClick={() =>
+              sendSignal("clipboard.sync", {
+                text: "controller-clipboard-stub",
+                format: "text/plain",
+              })
+            }
+            disabled={signalBusy || !selected || !isActiveSession}
+            className="px-3 py-1.5 rounded-lg bg-success/20 border border-success/40 text-success text-xs font-semibold disabled:opacity-50"
+          >
+            Send Clipboard
+          </button>
+        </div>
+
+        {signalError && (
+          <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger mb-3">
+            {signalError}
+          </div>
+        )}
+
+        {signalMessages.length === 0 ? (
+          <div className="text-xs text-slate-500 py-4 text-center border border-dashed border-surface-700 rounded-lg">
+            No signaling messages for selected session.
+          </div>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+            {signalMessages.map((msg) => (
+              <div key={msg.id} className="rounded-lg border border-surface-800 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-white">
+                    #{msg.seq} {msg.messageType}
+                  </p>
+                  <p className="text-[11px] text-slate-500">{msg.senderType}</p>
+                </div>
+                <pre className="mt-1 text-[11px] text-slate-300 whitespace-pre-wrap break-all">
+                  {JSON.stringify(msg.payload)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-600">
