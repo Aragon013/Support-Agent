@@ -40,7 +40,8 @@ type SessionSignalMessageType =
   | "signal.ice-candidate"
   | "control.input"
   | "clipboard.sync"
-  | "screen.frame.stub";
+  | "screen.frame.stub"
+  | "screen.frame.data";
 
 type SessionSignalMessage = {
   id: string;
@@ -61,6 +62,18 @@ type ControlInputAckPayload = {
   denyCode?: string;
 };
 
+type ScreenFrameDataPayload = {
+  frameData?: string;
+  frameId?: number;
+  capturedAt?: number;
+  width?: number;
+  height?: number;
+  encodingQuality?: number;
+  encodingFormat?: "jpeg";
+  captureDurationMs?: number;
+  encodeDurationMs?: number;
+};
+
 function asControlInputAck(
   msg: SessionSignalMessage | undefined,
 ): ControlInputAckPayload | null {
@@ -74,6 +87,26 @@ function asControlInputAck(
   }
 
   return payload as ControlInputAckPayload;
+}
+
+function asScreenFrameData(
+  msg: SessionSignalMessage | undefined,
+): ScreenFrameDataPayload | null {
+  if (!msg || msg.senderType !== "host" || msg.messageType !== "screen.frame.data") {
+    return null;
+  }
+
+  const payload = msg.payload;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const maybe = payload as ScreenFrameDataPayload;
+  if (typeof maybe.frameData !== "string" || maybe.frameData.length === 0) {
+    return null;
+  }
+
+  return maybe;
 }
 
 const STATUS_COLOR: Record<SessionStatus, string> = {
@@ -126,6 +159,37 @@ export function SessionsPanel() {
     }
 
     return null;
+  }, [signalMessages]);
+
+  const latestScreenFrame = useMemo(() => {
+    for (const msg of signalMessages) {
+      const parsed = asScreenFrameData(msg);
+      if (parsed) {
+        return {
+          message: msg,
+          payload: parsed,
+          dataUrl: `data:image/jpeg;base64,${parsed.frameData}`,
+        };
+      }
+    }
+
+    return null;
+  }, [signalMessages]);
+
+  const screenFrameFpsEstimate = useMemo(() => {
+    const frameSignals = signalMessages
+      .filter((x) => x.senderType === "host" && x.messageType === "screen.frame.data")
+      .slice(0, 20);
+
+    if (frameSignals.length < 2) {
+      return null;
+    }
+
+    const newest = new Date(frameSignals[0].createdAt).getTime();
+    const oldest = new Date(frameSignals[frameSignals.length - 1].createdAt).getTime();
+    const elapsedSec = Math.max(0.001, (newest - oldest) / 1000);
+    const fps = (frameSignals.length - 1) / elapsedSec;
+    return Number.isFinite(fps) ? fps.toFixed(1) : null;
   }, [signalMessages]);
 
   useEffect(() => {
@@ -503,7 +567,7 @@ export function SessionsPanel() {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold text-white">Session Signaling</h3>
-            <p className="text-xs text-slate-400 mt-0.5">WS + HTTP stub channel for offer/ice/input/clipboard</p>
+            <p className="text-xs text-slate-400 mt-0.5">WS + HTTP channel for offer/ice/input/clipboard/screen</p>
           </div>
           <div className={cn("flex items-center gap-1.5 text-xs font-medium", signalWsConnected ? "text-success" : "text-slate-500")}>
             {signalWsConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
@@ -569,6 +633,61 @@ export function SessionsPanel() {
             {signalError}
           </div>
         )}
+
+        <div className="rounded-lg border border-surface-800 bg-surface-950/60 px-3 py-3 mb-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-xs font-semibold text-white">Live Screen Frame (Host)</p>
+            <p className="text-[11px] text-slate-500">
+              {latestScreenFrame?.message.createdAt ?? "waiting"}
+            </p>
+          </div>
+
+          {latestScreenFrame ? (
+            <>
+              <div className="rounded-lg border border-surface-800 overflow-hidden bg-black/70">
+                <img
+                  src={latestScreenFrame.dataUrl}
+                  alt="Host live frame"
+                  className="w-full max-h-[340px] object-contain"
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs mt-2">
+                <div>
+                  <span className="text-slate-500">Frame:</span>{" "}
+                  <span className="text-white">#{latestScreenFrame.payload.frameId ?? "n/a"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Resolution:</span>{" "}
+                  <span className="text-white">
+                    {latestScreenFrame.payload.width ?? "?"}x{latestScreenFrame.payload.height ?? "?"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Encode:</span>{" "}
+                  <span className="text-white">
+                    {latestScreenFrame.payload.encodingFormat ?? "jpeg"} q{latestScreenFrame.payload.encodingQuality ?? "?"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500">FPS (estimate):</span>{" "}
+                  <span className="text-white">{screenFrameFpsEstimate ?? "n/a"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Capture ms:</span>{" "}
+                  <span className="text-white">{latestScreenFrame.payload.captureDurationMs ?? "n/a"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">Encode ms:</span>{" "}
+                  <span className="text-white">{latestScreenFrame.payload.encodeDurationMs ?? "n/a"}</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Waiting for host screen frames (`screen.frame.data`) on this session.
+            </p>
+          )}
+        </div>
 
         <div className="rounded-lg border border-surface-800 bg-surface-950/60 px-3 py-3 mb-3">
           <div className="flex items-center justify-between gap-2 mb-1">
