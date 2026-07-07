@@ -1,0 +1,373 @@
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+
+import {
+  InMemorySessionStore,
+  type SessionRecord,
+} from "../domain/session-store.js";
+import {
+  type SessionAccessMode,
+  type SessionApprovalMode,
+  type SessionCapability,
+  type SessionStatus,
+} from "../domain/session.js";
+import { InMemorySessionEventBus } from "../domain/session-event-bus.js";
+import {
+  registerSessionEventsWsRoute,
+  SessionEventsWsHub,
+} from "./session-events-ws.js";
+
+type CreateSessionBody = {
+  tenantId: string;
+  endpointId: string;
+  operatorId: string;
+  accessMode?: SessionAccessMode;
+  requestedCapabilities?: SessionCapability[];
+};
+
+type IdParams = {
+  id: string;
+};
+
+type EndpointPolicyParams = {
+  id: string;
+};
+
+type DenySessionBody = {
+  reason?: string;
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseOperatorRole(value: unknown): "viewer" | "tech" | "admin" {
+  if (value === "admin" || value === "tech" || value === "viewer") {
+    return value;
+  }
+  return "tech";
+}
+
+function parseAccessMode(value: unknown): SessionAccessMode {
+  return value === "control" ? "control" : "view";
+}
+
+function parseCapabilities(value: unknown): SessionCapability[] {
+  if (!Array.isArray(value)) {
+    return ["screen"];
+  }
+
+  const allowed = new Set<SessionCapability>(["screen", "input", "clipboard"]);
+  const parsed = value.filter(
+    (x): x is SessionCapability => typeof x === "string" && allowed.has(x as SessionCapability),
+  );
+
+  if (parsed.length === 0) {
+    return ["screen"];
+  }
+
+  return [...new Set(parsed)];
+}
+
+function parseEndpointOnline(value: unknown): boolean {
+  return value === "online" || value === "true";
+}
+
+function parseEndpointUnattended(value: unknown): boolean {
+  return value === "true";
+}
+
+function parseEndpointLicense(value: unknown): "active" | "inactive" {
+  return value === "inactive" ? "inactive" : "active";
+}
+
+function emitStateChanged(
+  eventBus: InMemorySessionEventBus,
+  session: SessionRecord,
+  prevStatus: SessionStatus,
+): void {
+  eventBus.emit("session.state.changed", session, {
+    prevStatus,
+    newStatus: session.status,
+    routeMode: session.routeMode,
+  });
+}
+
+export function registerSessionRoutes(app: FastifyInstance): void {
+  const store = new InMemorySessionStore();
+  const eventBus = new InMemorySessionEventBus();
+  const wsHub = new SessionEventsWsHub();
+  const detachWs = wsHub.attach(eventBus);
+
+  registerSessionEventsWsRoute(app, wsHub);
+
+  app.addHook("onClose", async () => {
+    detachWs();
+  });
+
+  app.get(
+    "/api/v1/endpoints/:id/session-policy",
+    async (
+      req: FastifyRequest<{ Params: EndpointPolicyParams }>,
+      reply: FastifyReply,
+    ) => {
+      const unattended = parseEndpointUnattended(
+        req.headers["x-endpoint-unattended"],
+      );
+      return reply.code(200).send({
+        endpointId: req.params.id,
+        unattendedEnabled: unattended,
+        requiresUserConsent: !unattended,
+        maxActiveControlSessions: 1,
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/sessions",
+    async (
+      req: FastifyRequest<{ Body: CreateSessionBody }>,
+      reply: FastifyReply,
+    ) => {
+      const body = req.body;
+      if (
+        !body ||
+        !isNonEmptyString(body.tenantId) ||
+        !isNonEmptyString(body.endpointId) ||
+        !isNonEmptyString(body.operatorId)
+      ) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId, endpointId and operatorId are required",
+        });
+      }
+
+      const role = parseOperatorRole(req.headers["x-operator-role"]);
+      if (role === "viewer") {
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: "role_insufficient",
+        });
+      }
+
+      const license = parseEndpointLicense(req.headers["x-endpoint-license-status"]);
+      if (license !== "active") {
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: "license_inactive",
+        });
+      }
+
+      const online = parseEndpointOnline(req.headers["x-endpoint-status"]);
+      if (!online) {
+        return reply.code(409).send({
+          code: "endpoint_offline",
+          message: "endpoint must be online",
+        });
+      }
+
+      const accessMode = parseAccessMode(body.accessMode);
+      if (accessMode === "control" && store.hasActiveControlSession(body.tenantId, body.endpointId)) {
+        return reply.code(409).send({
+          code: "endpoint_busy",
+          message: "endpoint already has an active control session",
+        });
+      }
+
+      const unattended = parseEndpointUnattended(req.headers["x-endpoint-unattended"]);
+      const approvalMode: SessionApprovalMode = unattended ? "unattended" : "user_consent";
+      const initialStatus: SessionStatus = unattended ? "signaling" : "pending_approval";
+
+      const session = store.create({
+        tenantId: body.tenantId,
+        endpointId: body.endpointId,
+        operatorId: body.operatorId,
+        status: initialStatus,
+        routeMode: "unknown",
+        approvalMode,
+        accessMode,
+        requestedCapabilities: parseCapabilities(body.requestedCapabilities),
+      });
+
+      eventBus.emit("session.created", session, {
+        approvalRequired: session.status === "pending_approval",
+      });
+      eventBus.emit("session.host.notified", session);
+      if (session.status === "pending_approval") {
+        eventBus.emit("session.approval.required", session);
+      }
+
+      return reply.code(201).send({
+        sessionId: session.id,
+        status: session.status,
+        approvalRequired: session.status === "pending_approval",
+        routeMode: session.routeMode,
+        approvalMode: session.approvalMode,
+      });
+    },
+  );
+
+  app.get(
+    "/api/v1/sessions/:id",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      return reply.code(200).send(found);
+    },
+  );
+
+  app.post(
+    "/api/v1/sessions/:id/approve",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      const updated = store.updateStatus(found.id, "signaling");
+      if (!updated) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "session cannot be approved from current state",
+        });
+      }
+
+      eventBus.emit("session.approved", updated, {
+        approvalMode: updated.approvalMode,
+      });
+      emitStateChanged(eventBus, updated, found.status);
+
+      return reply.code(200).send({
+        sessionId: updated.id,
+        status: updated.status,
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/sessions/:id/deny",
+    async (
+      req: FastifyRequest<{ Params: IdParams; Body: DenySessionBody }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      const reason = isNonEmptyString(req.body?.reason)
+        ? req.body.reason
+        : "user_denied";
+
+      const updated = store.updateStatus(found.id, "ended", {
+        endReason: reason,
+      });
+      if (!updated) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "session cannot be denied from current state",
+        });
+      }
+
+      eventBus.emit("session.denied", updated, { reasonCode: reason });
+      emitStateChanged(eventBus, updated, found.status);
+      eventBus.emit("session.ended", updated, {
+        endReason: reason,
+      });
+
+      return reply.code(200).send({
+        sessionId: updated.id,
+        status: updated.status,
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/sessions/:id/end",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      const updated = store.updateStatus(found.id, "ended", {
+        endReason: "ended_by_operator",
+      });
+      if (!updated) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "session cannot be ended from current state",
+        });
+      }
+
+      emitStateChanged(eventBus, updated, found.status);
+      eventBus.emit("session.ended", updated, {
+        endReason: "ended_by_operator",
+      });
+
+      return reply.code(200).send({
+        sessionId: updated.id,
+        status: updated.status,
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/sessions/:id/cancel",
+    async (
+      req: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ) => {
+      const found = store.getById(req.params.id);
+      if (!found) {
+        return reply.code(404).send({
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+
+      const updated = store.updateStatus(found.id, "ended", {
+        endReason: "cancelled_by_operator",
+      });
+      if (!updated) {
+        return reply.code(409).send({
+          code: "invalid_state_transition",
+          message: "session cannot be cancelled from current state",
+        });
+      }
+
+      emitStateChanged(eventBus, updated, found.status);
+      eventBus.emit("session.ended", updated, {
+        endReason: "cancelled_by_operator",
+      });
+
+      return reply.code(200).send({
+        sessionId: updated.id,
+        status: updated.status,
+      });
+    },
+  );
+}
