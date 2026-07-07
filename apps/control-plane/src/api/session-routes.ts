@@ -60,6 +60,28 @@ type SignalBody = {
   payload?: Record<string, unknown>;
 };
 
+function isSignalDirectionAllowed(
+  senderType: SessionSignalSenderType,
+  messageType: SessionSignalMessageType,
+): boolean {
+  if (senderType === "controller") {
+    return (
+      messageType === "signal.offer" ||
+      messageType === "signal.ice-candidate" ||
+      messageType === "control.input" ||
+      messageType === "clipboard.sync"
+    );
+  }
+
+  return (
+    messageType === "signal.answer" ||
+    messageType === "signal.ice-candidate" ||
+    messageType === "clipboard.sync" ||
+    messageType === "screen.frame.stub" ||
+    messageType === "control.input"
+  );
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -321,6 +343,24 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         return reply.code(422).send({
           code: "validation_error",
           message: "messageType is invalid",
+        });
+      }
+
+      const participantHeader = req.headers["x-participant-type"];
+      if (
+        (participantHeader === "controller" || participantHeader === "host") &&
+        participantHeader !== senderType
+      ) {
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: "participant_sender_mismatch",
+        });
+      }
+
+      if (!isSignalDirectionAllowed(senderType, messageType)) {
+        return reply.code(403).send({
+          code: "policy_denied",
+          reason: "message_direction_invalid",
         });
       }
 

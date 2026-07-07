@@ -209,4 +209,85 @@ describe("session routes", () => {
 
     await app.close();
   });
+
+  it("rejects invalid signaling message direction", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const signal = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      payload: {
+        senderType: "host",
+        messageType: "signal.offer",
+        payload: {
+          sdp: "v=0...",
+        },
+      },
+    });
+
+    expect(signal.statusCode).toBe(403);
+    expect(signal.json().reason).toBe("message_direction_invalid");
+
+    await app.close();
+  });
+
+  it("rejects participant header mismatch with sender type", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: {
+        "x-operator-role": "tech",
+        "x-endpoint-status": "online",
+        "x-endpoint-unattended": "true",
+      },
+      payload: {
+        tenantId: "tenant-signal",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const sessionId = create.json().sessionId as string;
+
+    const signal = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/signal`,
+      headers: {
+        "x-participant-type": "host",
+      },
+      payload: {
+        senderType: "controller",
+        messageType: "control.input",
+        payload: {
+          action: "mouse.move",
+          x: 10,
+          y: 20,
+        },
+      },
+    });
+
+    expect(signal.statusCode).toBe(403);
+    expect(signal.json().reason).toBe("participant_sender_mismatch");
+
+    await app.close();
+  });
 });
