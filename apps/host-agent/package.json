@@ -15,6 +15,7 @@
     "service:stop": "powershell -ExecutionPolicy Bypass -File ./scripts/stop-windows-service.ps1"
   },
   "dependencies": {
+    "robotjs": "^0.6.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

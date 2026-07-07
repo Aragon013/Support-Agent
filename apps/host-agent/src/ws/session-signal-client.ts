@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { handleRemoteInput } from "../input/input-executor.js";
 
 export type SessionSignalClientConfig = {
   controlPlaneUrl: string;
@@ -62,7 +63,11 @@ export type ControlInputDenyCode =
   | "input_capability_missing"
   | "session_not_active"
   | "invalid_payload"
-  | "sender_not_controller";
+  | "invalid_action"
+  | "sender_not_controller"
+  | "execution_failed"
+  | "out_of_bounds"
+  | "platform_error";
 
 export type ControlInputResultPayload = {
   result: "accepted" | "denied";
@@ -303,7 +308,17 @@ export class SessionSignalClient {
       return;
     }
 
-    this.log(`[agent/signal] accepted control.input for ${session.id}: ${action}`);
+    // Try to execute the input action
+    const result = await handleRemoteInput(msg.payload);
+    if (!result.success) {
+      this.log(
+        `[agent/signal] failed to execute control.input for ${session.id}: ${result.error}`,
+      );
+      await this.postInputResult(session, false, result.error, action);
+      return;
+    }
+
+    this.log(`[agent/signal] executed control.input for ${session.id}: ${action}`);
     await this.postInputResult(session, true, undefined, action);
   }
 
