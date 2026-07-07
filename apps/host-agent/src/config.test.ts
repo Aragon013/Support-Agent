@@ -12,6 +12,7 @@ describe("loadAgentConfig", () => {
     expect(cfg.endpointId).toBe("endpoint-local");
     expect(cfg.maxConcurrent).toBe(3);
     expect(cfg.timeoutMs).toBe(30000);
+    expect(cfg.autoApproveSessions).toBe(false);
   });
 
   it("loads values from config file", () => {
@@ -26,6 +27,7 @@ describe("loadAgentConfig", () => {
           endpointId: "pc-001",
           maxConcurrent: 5,
           timeoutMs: 45000,
+          autoApproveSessions: true,
         }),
         "utf8",
       );
@@ -36,6 +38,7 @@ describe("loadAgentConfig", () => {
       expect(cfg.endpointId).toBe("pc-001");
       expect(cfg.maxConcurrent).toBe(5);
       expect(cfg.timeoutMs).toBe(45000);
+      expect(cfg.autoApproveSessions).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -53,6 +56,7 @@ describe("loadAgentConfig", () => {
           endpointId: "pc-001",
           maxConcurrent: 2,
           timeoutMs: 15000,
+          autoApproveSessions: false,
         }),
         "utf8",
       );
@@ -63,6 +67,7 @@ describe("loadAgentConfig", () => {
         ENDPOINT_ID: "pc-override",
         MAX_CONCURRENT: "7",
         TIMEOUT_MS: "60000",
+        AUTO_APPROVE_SESSIONS: "true",
       });
 
       expect(cfg.controlPlaneUrl).toBe("https://override.example.com");
@@ -70,6 +75,7 @@ describe("loadAgentConfig", () => {
       expect(cfg.endpointId).toBe("pc-override");
       expect(cfg.maxConcurrent).toBe(7);
       expect(cfg.timeoutMs).toBe(60000);
+      expect(cfg.autoApproveSessions).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -6,6 +6,7 @@ export type AgentConfig = {
   endpointId: string;
   maxConcurrent: number;
   timeoutMs: number;
+  autoApproveSessions: boolean;
 };
 
 type PartialConfig = Partial<AgentConfig>;
@@ -42,6 +43,10 @@ export function loadAgentConfig(
     "TIMEOUT_MS",
   );
 
+  const autoApproveSessions = parseBoolean(
+    env["AUTO_APPROVE_SESSIONS"] ?? asString(fileConfig.autoApproveSessions) ?? "false",
+  );
+
   if (!isHttpUrl(controlPlaneUrl)) {
     throw new Error("CONTROL_PLANE_URL must be an http/https URL");
   }
@@ -52,6 +57,7 @@ export function loadAgentConfig(
     endpointId,
     maxConcurrent,
     timeoutMs,
+    autoApproveSessions,
   };
 }
 
@@ -100,7 +106,13 @@ function parsePositiveInt(raw: string, field: string): number {
 function asString(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
   return undefined;
+}
+
+function parseBoolean(raw: string): boolean {
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function isHttpUrl(value: string): boolean {
