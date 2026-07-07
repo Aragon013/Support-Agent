@@ -6,6 +6,7 @@ import { CommandPanel } from "@/panels/CommandPanel";
 import { JobsPanel } from "@/panels/JobsPanel";
 import { AuditPanel } from "@/panels/AuditPanel";
 import { MonitorPanel } from "@/panels/MonitorPanel";
+import { SessionsPanel } from "@/panels/SessionsPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 
 const PANELS: Record<NavTab, React.ElementType> = {
@@ -13,6 +14,7 @@ const PANELS: Record<NavTab, React.ElementType> = {
   jobs:     JobsPanel,
   audit:    AuditPanel,
   monitor:  MonitorPanel,
+  sessions: SessionsPanel,
   settings: SettingsPanel,
 };
 

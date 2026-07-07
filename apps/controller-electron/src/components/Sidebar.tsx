@@ -4,17 +4,19 @@ import {
   LayoutList,
   ShieldCheck,
   Activity,
+  Radio,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export type NavTab = "commands" | "jobs" | "audit" | "monitor" | "settings";
+export type NavTab = "commands" | "jobs" | "audit" | "monitor" | "sessions" | "settings";
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ElementType }[] = [
   { id: "commands",  label: "Commands",  icon: Terminal },
   { id: "jobs",      label: "Jobs",      icon: LayoutList },
   { id: "audit",     label: "Audit",     icon: ShieldCheck },
   { id: "monitor",   label: "Monitor",   icon: Activity },
+  { id: "sessions",  label: "Sessions",  icon: Radio },
   { id: "settings",  label: "Settings",  icon: Settings },
 ];
 
