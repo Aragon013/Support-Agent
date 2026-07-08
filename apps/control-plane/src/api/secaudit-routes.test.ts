@@ -125,4 +125,61 @@ describe("secaudit routes", () => {
 
     await app.close();
   });
+
+  it("exports report with score and executive summary", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-1",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["net.client-health"],
+      },
+    });
+
+    const plan = create.json() as { id: string };
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan.id}/run`,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan.id}/client-findings`,
+      payload: {
+        moduleId: "net.client-health",
+        findings: { status: "ok" },
+        evidence: ["ping=31ms"],
+      },
+    });
+
+    const report = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/plans/${plan.id}/report`,
+    });
+
+    expect(report.statusCode).toBe(200);
+    const body = report.json() as {
+      id: string;
+      executive: { score: number | null; severities: Record<string, number>; summary: string };
+      modules: Array<{ id: string; status: string }>;
+    };
+
+    expect(body.id).toBe(plan.id);
+    expect(body.executive).toBeDefined();
+    expect(body.executive.score).toBe(100); // No severity findings = perfect score
+    expect(body.executive.severities).toBeDefined();
+    expect(body.executive.summary).toContain("Audit completed");
+    expect(body.modules.length).toBe(1);
+    expect(body.modules[0]?.id).toBe("net.client-health");
+
+    await app.close();
+  });
 });

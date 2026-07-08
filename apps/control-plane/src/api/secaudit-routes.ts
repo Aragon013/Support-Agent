@@ -317,6 +317,60 @@ export function registerSecAuditRoutesWithDeps(
   );
 
   app.get(
+    "/api/v1/secaudit/plans/:id/report",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const plan = store.getById(req.params.id);
+      if (!plan) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+
+      const completedModules = plan.results.filter((x) => x.status === "completed");
+      const failedModules = plan.results.filter((x) => x.status === "failed");
+      const pendingModules = plan.results.filter((x) => x.status === "pending" || x.status === "running" || x.status === "client_required");
+
+      const report = {
+        id: plan.id,
+        tenantId: plan.tenantId,
+        endpointId: plan.endpointId,
+        operatorId: plan.operatorId,
+        packageId: plan.packageId,
+        targetOs: plan.targetOs,
+        executionLevel: plan.executionLevel,
+        status: plan.status,
+        createdAt: plan.createdAt,
+        updatedAt: plan.updatedAt,
+        executive: {
+          score: plan.score ?? null,
+          severities: plan.severityBuckets ?? { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+          completion: {
+            total: plan.results.length,
+            completed: completedModules.length,
+            failed: failedModules.length,
+            pending: pendingModules.length,
+            percentComplete: plan.results.length > 0 ? Math.round((completedModules.length / plan.results.length) * 100) : 0,
+          },
+          summary: completedModules.length > 0
+            ? `Audit completed with ${plan.score} security score. ${plan.severityBuckets?.critical ?? 0} critical, ${plan.severityBuckets?.high ?? 0} high severity findings.`
+            : failedModules.length > 0
+              ? `Audit partially completed. ${failedModules.length} module(s) failed.`
+              : "Audit in progress or awaiting client results.",
+        },
+        modules: plan.results.map((result) => ({
+          id: result.moduleId,
+          origin: result.origin,
+          status: result.status,
+          findings: result.findings ?? null,
+          evidence: result.evidence ?? [],
+          error: result.error ?? null,
+          updatedAt: result.updatedAt,
+        })),
+      };
+
+      return reply.code(200).send(report);
+    },
+  );
+
+  app.get(
     "/api/v1/secaudit/plans",
     { preHandler: requireAdminKey },
     async (req: FastifyRequest, reply: FastifyReply) => {

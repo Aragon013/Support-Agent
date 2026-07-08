@@ -10,6 +10,7 @@ import {
   Circle,
   Clock3,
   Filter,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
@@ -393,6 +394,31 @@ export function SecAuditPanel() {
     return data;
   };
 
+  const downloadReport = async () => {
+    if (!activePlanId) {
+      setRunError("No active plan to export.");
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${activePlanId}/report`));
+      if (!response.ok) {
+        throw new Error(`report_http_${response.status}`);
+      }
+      const report = await response.json();
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `secaudit-report-${activePlanId}-${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to download report");
+    }
+  };
+
   const runAudit = async () => {
     if (selectedModules.length === 0) {
       setRunError("Select at least one module before running the audit.");
@@ -693,6 +719,16 @@ export function SecAuditPanel() {
                 )}
               </div>
             ) : null}
+
+            {activePlanId && runState === "done" && (
+              <button
+                onClick={downloadReport}
+                className="mb-3 w-full rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-semibold text-brand transition hover:bg-brand/20"
+              >
+                <Download className="mr-2 inline h-4 w-4" />
+                Export Report (JSON)
+              </button>
+            )}
 
             <div className="max-h-56 space-y-2 overflow-auto">
               {results.length === 0 ? (
