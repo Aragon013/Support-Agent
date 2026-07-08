@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { resolveInstallProfile, type InstallProfile } from "./install-profile";
+import { mapErrorMessage } from "./error-messages";
 
 type CommandRisk = "low" | "medium" | "high";
 
@@ -593,7 +594,12 @@ export function SupportPanel() {
           { signal: controller.signal },
         );
         if (!res.ok) {
-          throw new Error(`policy_http_${res.status}`);
+          const friendlyError = mapErrorMessage(
+            `policy_http_${res.status}`,
+            null,
+            res.status,
+          );
+          throw new Error(friendlyError);
         }
 
         const body = await res.json() as EndpointSessionPolicy;
@@ -716,14 +722,12 @@ export function SupportPanel() {
 
       const body = await response.json() as Partial<JobRecord> & { reason?: string; requiresMfa?: boolean };
       if (!response.ok) {
-        if (body.reason === "install_profile_remote_only") {
-          throw new Error("This endpoint is Remote Only. Support commands are disabled by installation policy.");
-        }
-        throw new Error(body.reason ?? `http_${response.status}`);
+        const friendlyError = mapErrorMessage(body.reason, body.reason, response.status);
+        throw new Error(friendlyError);
       }
 
       if (!body.id || !body.status) {
-        throw new Error("missing job id/status in response");
+        throw new Error("Missing job ID in response. Try again.");
       }
 
       const created: JobRecord = {
@@ -1025,7 +1029,9 @@ export function SupportPanel() {
 
       {policyError && (
         <div className="rounded-2xl border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-warn shadow-sm">
-          Could not refresh endpoint policy ({policyError}). Using safe fallback profile.
+          <div className="font-semibold mb-1">⚠ Endpoint Policy Error</div>
+          <div className="text-sm">{policyError}</div>
+          <div className="text-xs text-warn/70 mt-2">Using safe fallback profile (minimal access). Register endpoint via API to enable features.</div>
         </div>
       )}
 

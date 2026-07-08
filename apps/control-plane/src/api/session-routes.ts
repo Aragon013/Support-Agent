@@ -242,12 +242,92 @@ export function registerSessionRoutesWithDeps(
     detachWs();
   });
 
+  // Initialize registry (load from JSON if dev)
+  app.addHook("onReady", async () => {
+    await endpointRegistry.init();
+  });
+
+  /**
+   * POST /api/v1/endpoints
+   * Register or update an endpoint in the registry.
+   * Required fields: endpointId, installProfile
+   */
+  app.post(
+    "/api/v1/endpoints",
+    async (
+      req: FastifyRequest<{
+        Body: {
+          endpointId: string;
+          installProfile?: EndpointInstallProfile;
+          licenseStatus?: "active" | "inactive";
+          unattendedEnabled?: boolean;
+          maxActiveControlSessions?: number;
+        };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const body = req.body;
+
+      if (!isNonEmptyString(body?.endpointId)) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "endpointId is required",
+        });
+      }
+
+      const installProfile = parseEndpointInstallProfile(body.installProfile);
+      const licenseStatus = body.licenseStatus === "inactive" ? "inactive" : "active";
+      const unattended = body.unattendedEnabled === true;
+
+      await endpointRegistry.register({
+        endpointId: body.endpointId,
+        installProfile,
+        licenseStatus,
+        supportCommandsAllowed: installProfile !== "remote_only",
+        folderActionsAllowed: installProfile === "support_full",
+        unattendedEnabled: unattended,
+        requiresUserConsent: !unattended,
+        maxActiveControlSessions: body.maxActiveControlSessions ?? 1,
+      });
+
+      auditStore.append({
+        tenantId: "system",
+        endpointId: body.endpointId,
+        operatorId: "provisioning-api",
+        code: "endpoint.registered",
+        details: {
+          installProfile,
+          licenseStatus,
+          unattendedEnabled: unattended,
+        },
+      });
+
+      return reply.code(201).send({
+        endpointId: body.endpointId,
+        installProfile,
+        message: "Endpoint registered successfully",
+      });
+    },
+  );
+
+  /**
+   * GET /api/v1/endpoints
+   * List all registered endpoints (admin only).
+   */
+  app.get("/api/v1/endpoints", async (req: FastifyRequest, reply: FastifyReply) => {
+    return reply.code(200).send({
+      items: endpointRegistry.listAll(),
+      count: endpointRegistry.listAll().length,
+    });
+  });
+
   /**
    * GET /api/v1/endpoints/:id/session-policy
    * Returns the endpoint's security policy (installProfile, license status, etc.)
    * 
    * In production: reads from the endpoint registry (authoritative source).
-   * In dev: headers are treated as hints for testing purposes.
+   * In dev: headers are treated as hints for testing purposes only.
+   * Logs when header overrides registry (security audit).
    */
   app.get(
     "/api/v1/endpoints/:id/session-policy",
@@ -256,10 +336,10 @@ export function registerSessionRoutesWithDeps(
       reply: FastifyReply,
     ) => {
       const endpointId = req.params.id;
-      
+
       // Try to load from registry first (authoritative source)
       const registeredEndpoint = endpointRegistry.get(endpointId);
-      
+
       if (registeredEndpoint) {
         // Endpoint is registered in our system
         return reply.code(200).send({
@@ -270,30 +350,56 @@ export function registerSessionRoutesWithDeps(
           installProfile: registeredEndpoint.installProfile,
           supportCommandsAllowed: registeredEndpoint.supportCommandsAllowed,
           folderActionsAllowed: registeredEndpoint.folderActionsAllowed,
+          source: "registry",
         });
       }
-      
+
       // Endpoint not registered: use header hints (dev mode only) or safe defaults
       if (isDev) {
         // In dev, allow headers to override for testing
         const unattended = parseEndpointUnattended(
           req.headers["x-endpoint-unattended"],
         );
-        const installProfile = parseEndpointInstallProfile(
+        const headerInstallProfile = parseEndpointInstallProfile(
           req.headers["x-endpoint-install-profile"],
         );
+
+        // AUDIT: Log when header is used instead of registry
+        auditStore.append({
+          tenantId: "unknown",
+          endpointId,
+          operatorId: "system",
+          code: "endpoint.policy.header_override",
+          details: {
+            headerInstallProfile,
+            reason: "endpoint_not_in_registry",
+            devMode: true,
+          },
+        });
+
         return reply.code(200).send({
           endpointId,
           unattendedEnabled: unattended,
           requiresUserConsent: !unattended,
           maxActiveControlSessions: 1,
-          installProfile,
-          supportCommandsAllowed: installProfile !== "remote_only",
-          folderActionsAllowed: installProfile === "support_full",
+          installProfile: headerInstallProfile,
+          supportCommandsAllowed: headerInstallProfile !== "remote_only",
+          folderActionsAllowed: headerInstallProfile === "support_full",
+          source: "header (dev-only)",
         });
       }
-      
+
       // In production, unknown endpoints get the most restrictive profile
+      auditStore.append({
+        tenantId: "unknown",
+        endpointId,
+        operatorId: "system",
+        code: "endpoint.policy.not_found",
+        details: {
+          prodFallback: "remote_only",
+        },
+      });
+
       return reply.code(200).send({
         endpointId,
         unattendedEnabled: false,
@@ -302,6 +408,7 @@ export function registerSessionRoutesWithDeps(
         installProfile: "remote_only",
         supportCommandsAllowed: false,
         folderActionsAllowed: false,
+        source: "fallback (not registered)",
       });
     },
   );
