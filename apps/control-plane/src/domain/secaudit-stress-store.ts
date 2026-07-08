@@ -24,6 +24,45 @@ export type StressSummary = {
   peakPacketLossPct: number;
 };
 
+export type StressStopThresholds = {
+  packetLossPct?: number;
+  latencyMs?: number;
+  responseTimeMs?: number;
+};
+
+export type StressRecoveryThresholds = {
+  packetLossPct?: number;
+  latencyMs?: number;
+  responseTimeMs?: number;
+};
+
+export type StressRecoveryPolicy = {
+  autoResumeEnabled: boolean;
+  stopThresholds: StressStopThresholds;
+  resumeDelayMs: number;
+  resumeBackoffMs: number;
+  maxResumeAttempts: number;
+  resumeProbeSamples: number;
+  resumeHealthySamplesRequired: number;
+  resumeThresholds: StressRecoveryThresholds;
+};
+
+export type StressRecoveryEvent = {
+  kind: "stop" | "resume_attempt" | "resume_success" | "resume_exhausted";
+  at: string;
+  iteration: number;
+  details: string;
+  attempt?: number;
+  waitMs?: number;
+};
+
+export type StressRecoveryTrace = {
+  policy: StressRecoveryPolicy;
+  attempts: number;
+  resumed: boolean;
+  events: StressRecoveryEvent[];
+};
+
 export type SecAuditStressReport = {
   id: string;
   module: StressModuleType;
@@ -36,6 +75,7 @@ export type SecAuditStressReport = {
   closedSafely: boolean;
   summary: StressSummary;
   metrics: StressMetricSample[];
+  recovery: StressRecoveryTrace;
 };
 
 export class InMemorySecAuditStressStore {

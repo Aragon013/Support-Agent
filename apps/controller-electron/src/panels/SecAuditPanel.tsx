@@ -112,6 +112,54 @@ type SecAuditSchedule = {
   createdAt: string;
 };
 
+type StressRecoveryPolicyInput = {
+  autoResumeEnabled: boolean;
+  stopPacketLossPct: string;
+  stopLatencyMs: string;
+  stopResponseTimeMs: string;
+  resumeDelayMs: string;
+  resumeBackoffMs: string;
+  maxResumeAttempts: string;
+  resumeProbeSamples: string;
+  resumeHealthySamplesRequired: string;
+  resumePacketLossPct: string;
+  resumeLatencyMs: string;
+  resumeResponseTimeMs: string;
+};
+
+type StressRecoveryEvent = {
+  kind: "stop" | "resume_attempt" | "resume_success" | "resume_exhausted";
+  at: string;
+  iteration: number;
+  details: string;
+  attempt?: number;
+  waitMs?: number;
+};
+
+type StressReportItem = {
+  id: string;
+  module: "ethernet_resilience" | "wireless_density";
+  status: "completed" | "hardware_limit" | "failed";
+  createdAt: string;
+  terminationReason: string;
+  closedSafely: boolean;
+  summary: {
+    samples: number;
+    avgLatencyMs: number;
+    avgPacketLossPct: number;
+    avgResponseTimeMs: number;
+    p95LatencyMs: number;
+    p95ResponseTimeMs: number;
+    peakPacketLossPct: number;
+  };
+  recovery: {
+    attempts: number;
+    resumed: boolean;
+    policy: { autoResumeEnabled: boolean; maxResumeAttempts: number };
+    events: StressRecoveryEvent[];
+  };
+};
+
 type AuditOrigin = "host" | "host_network" | "client_network";
 type OSType = "windows" | "linux" | "macos" | "all";
 type AuditLevel = "safe" | "safe_light" | "deep";
@@ -538,6 +586,31 @@ export function SecAuditPanel() {
   const [scheduleIntervalMinutes, setScheduleIntervalMinutes] = useState<string>("60");
   const [scheduleItems, setScheduleItems] = useState<SecAuditSchedule[]>([]);
   const [scheduleBusy, setScheduleBusy] = useState<"idle" | "creating" | "loading" | "deleting">("idle");
+  const [stressModule, setStressModule] = useState<"ethernet" | "wireless">("ethernet");
+  const [stressEndpointId, setStressEndpointId] = useState<string>("endpoint-dev-01");
+  const [stressApId, setStressApId] = useState<string>("ap-hq-01");
+  const [stressIterations, setStressIterations] = useState<string>("12");
+  const [stressBandwidth, setStressBandwidth] = useState<string>("1000");
+  const [stressSaturationThreshold, setStressSaturationThreshold] = useState<string>("88");
+  const [stressMaxClients, setStressMaxClients] = useState<string>("150");
+  const [stressAssociationThreshold, setStressAssociationThreshold] = useState<string>("92");
+  const [stressPolicy, setStressPolicy] = useState<StressRecoveryPolicyInput>({
+    autoResumeEnabled: true,
+    stopPacketLossPct: "18",
+    stopLatencyMs: "320",
+    stopResponseTimeMs: "520",
+    resumeDelayMs: "2000",
+    resumeBackoffMs: "1000",
+    maxResumeAttempts: "2",
+    resumeProbeSamples: "2",
+    resumeHealthySamplesRequired: "2",
+    resumePacketLossPct: "6",
+    resumeLatencyMs: "140",
+    resumeResponseTimeMs: "240",
+  });
+  const [stressBusy, setStressBusy] = useState<"idle" | "running" | "loading">("idle");
+  const [stressReports, setStressReports] = useState<StressReportItem[]>([]);
+  const [stressError, setStressError] = useState<string | null>(null);
 
   const packageMeta = useMemo(
     () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
@@ -959,6 +1032,103 @@ export function SecAuditPanel() {
     }
   };
 
+  const buildRecoveryPolicyPayload = () => ({
+    autoResumeEnabled: stressPolicy.autoResumeEnabled,
+    stopThresholds: {
+      packetLossPct: Number(stressPolicy.stopPacketLossPct),
+      latencyMs: Number(stressPolicy.stopLatencyMs),
+      responseTimeMs: Number(stressPolicy.stopResponseTimeMs),
+    },
+    resumeDelayMs: Number(stressPolicy.resumeDelayMs),
+    resumeBackoffMs: Number(stressPolicy.resumeBackoffMs),
+    maxResumeAttempts: Number(stressPolicy.maxResumeAttempts),
+    resumeProbeSamples: Number(stressPolicy.resumeProbeSamples),
+    resumeHealthySamplesRequired: Number(stressPolicy.resumeHealthySamplesRequired),
+    resumeThresholds: {
+      packetLossPct: Number(stressPolicy.resumePacketLossPct),
+      latencyMs: Number(stressPolicy.resumeLatencyMs),
+      responseTimeMs: Number(stressPolicy.resumeResponseTimeMs),
+    },
+  });
+
+  const loadStressReports = async () => {
+    setStressBusy("loading");
+    try {
+      const moduleQuery = stressModule === "ethernet" ? "ethernet_resilience" : "wireless_density";
+      const response = await fetch(apiUrl(`/api/v1/secaudit/stress/reports?tenantId=default&module=${moduleQuery}`));
+      if (!response.ok) {
+        throw new Error(`stress_reports_http_${response.status}`);
+      }
+      const payload = (await response.json()) as { items?: StressReportItem[] };
+      setStressReports(Array.isArray(payload.items) ? payload.items : []);
+    } catch (error) {
+      setStressError(error instanceof Error ? error.message : "Failed to load stress reports");
+    } finally {
+      setStressBusy("idle");
+    }
+  };
+
+  const runStressDiagnostics = async () => {
+    if (!stressEndpointId.trim()) {
+      setStressError("Endpoint ID is required for stress diagnostics.");
+      return;
+    }
+    if (stressModule === "wireless" && !stressApId.trim()) {
+      setStressError("AP ID is required for wireless density diagnostics.");
+      return;
+    }
+
+    setStressError(null);
+    setStressBusy("running");
+    try {
+      const endpoint =
+        stressModule === "ethernet"
+          ? "/api/v1/secaudit/stress/ethernet-resilience"
+          : "/api/v1/secaudit/stress/wireless-density";
+
+      const payload =
+        stressModule === "ethernet"
+          ? {
+              tenantId: "default",
+              operatorId: "operator-ui",
+              endpointId: stressEndpointId.trim(),
+              iterations: Number(stressIterations),
+              expectedBandwidthMbps: Number(stressBandwidth),
+              saturationThresholdPct: Number(stressSaturationThreshold),
+              recoveryPolicy: buildRecoveryPolicyPayload(),
+            }
+          : {
+              tenantId: "default",
+              operatorId: "operator-ui",
+              endpointId: stressEndpointId.trim(),
+              apId: stressApId.trim(),
+              iterations: Number(stressIterations),
+              expectedMaxClients: Number(stressMaxClients),
+              associationThresholdPct: Number(stressAssociationThreshold),
+              recoveryPolicy: buildRecoveryPolicyPayload(),
+            };
+
+      const response = await fetch(apiUrl(endpoint), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `stress_run_http_${response.status}`);
+      }
+
+      await loadStressReports();
+    } catch (error) {
+      setStressError(error instanceof Error ? error.message : "Failed to run stress diagnostics");
+    } finally {
+      setStressBusy("idle");
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5 p-6 text-slate-900">
       <section className="tv-panel p-5">
@@ -1318,6 +1488,278 @@ export function SecAuditPanel() {
                         {scheduleBusy === "deleting" ? "Deleting..." : "Delete"}
                       </button>
                     </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="tv-panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Stress Recovery Diagnostics</h3>
+              <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                {stressReports.length} reports
+              </span>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <label className="grid gap-1">
+                <span className="text-xs font-medium text-slate-600">Module</span>
+                <select
+                  value={stressModule}
+                  onChange={(e) => setStressModule(e.target.value as "ethernet" | "wireless")}
+                  className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                >
+                  <option value="ethernet">Ethernet Resilience</option>
+                  <option value="wireless">Wireless Density</option>
+                </select>
+              </label>
+
+              <label className="grid gap-1">
+                <span className="text-xs font-medium text-slate-600">Endpoint ID</span>
+                <input
+                  value={stressEndpointId}
+                  onChange={(e) => setStressEndpointId(e.target.value)}
+                  className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                />
+              </label>
+
+              {stressModule === "wireless" ? (
+                <label className="grid gap-1">
+                  <span className="text-xs font-medium text-slate-600">AP ID</span>
+                  <input
+                    value={stressApId}
+                    onChange={(e) => setStressApId(e.target.value)}
+                    className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                  />
+                </label>
+              ) : null}
+
+              <label className="grid gap-1">
+                <span className="text-xs font-medium text-slate-600">Iterations</span>
+                <input
+                  value={stressIterations}
+                  onChange={(e) => setStressIterations(e.target.value)}
+                  inputMode="numeric"
+                  className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                />
+              </label>
+
+              {stressModule === "ethernet" ? (
+                <>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-medium text-slate-600">Expected Bandwidth (Mbps)</span>
+                    <input
+                      value={stressBandwidth}
+                      onChange={(e) => setStressBandwidth(e.target.value)}
+                      inputMode="numeric"
+                      className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-medium text-slate-600">Saturation Stop (%)</span>
+                    <input
+                      value={stressSaturationThreshold}
+                      onChange={(e) => setStressSaturationThreshold(e.target.value)}
+                      inputMode="numeric"
+                      className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-medium text-slate-600">Expected Max Clients</span>
+                    <input
+                      value={stressMaxClients}
+                      onChange={(e) => setStressMaxClients(e.target.value)}
+                      inputMode="numeric"
+                      className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-medium text-slate-600">Association Stop (%)</span>
+                    <input
+                      value={stressAssociationThreshold}
+                      onChange={(e) => setStressAssociationThreshold(e.target.value)}
+                      inputMode="numeric"
+                      className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+
+            <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+              <p className="text-xs font-semibold text-slate-800">Safe-close Recovery Policy</p>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Auto Resume</span>
+                  <input
+                    type="checkbox"
+                    checked={stressPolicy.autoResumeEnabled}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, autoResumeEnabled: e.target.checked }))}
+                    className="h-4 w-4"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Max Resume Attempts</span>
+                  <input
+                    value={stressPolicy.maxResumeAttempts}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, maxResumeAttempts: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Resume Delay (ms)</span>
+                  <input
+                    value={stressPolicy.resumeDelayMs}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumeDelayMs: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Resume Backoff (ms)</span>
+                  <input
+                    value={stressPolicy.resumeBackoffMs}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumeBackoffMs: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Probe Samples</span>
+                  <input
+                    value={stressPolicy.resumeProbeSamples}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumeProbeSamples: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Healthy Samples Required</span>
+                  <input
+                    value={stressPolicy.resumeHealthySamplesRequired}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumeHealthySamplesRequired: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Stop Loss %</span>
+                  <input
+                    value={stressPolicy.stopPacketLossPct}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, stopPacketLossPct: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Stop Latency ms</span>
+                  <input
+                    value={stressPolicy.stopLatencyMs}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, stopLatencyMs: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Stop Response ms</span>
+                  <input
+                    value={stressPolicy.stopResponseTimeMs}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, stopResponseTimeMs: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Resume Loss %</span>
+                  <input
+                    value={stressPolicy.resumePacketLossPct}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumePacketLossPct: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Resume Latency ms</span>
+                  <input
+                    value={stressPolicy.resumeLatencyMs}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumeLatencyMs: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-slate-700">
+                  <span>Resume Response ms</span>
+                  <input
+                    value={stressPolicy.resumeResponseTimeMs}
+                    onChange={(e) => setStressPolicy((prev) => ({ ...prev, resumeResponseTimeMs: e.target.value }))}
+                    inputMode="numeric"
+                    className="rounded border border-blue-100 bg-white px-2 py-1.5 text-xs"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                onClick={runStressDiagnostics}
+                disabled={stressBusy !== "idle"}
+                className="rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-xs font-semibold text-brand transition hover:bg-brand/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {stressBusy === "running" ? "Running..." : "Run Stress Diagnostics"}
+              </button>
+              <button
+                onClick={loadStressReports}
+                disabled={stressBusy !== "idle"}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {stressBusy === "loading" ? "Refreshing..." : "Refresh Reports"}
+              </button>
+            </div>
+
+            {stressError ? <p className="mt-2 text-xs text-danger">{stressError}</p> : null}
+
+            <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+              {stressReports.length === 0 ? (
+                <p className="text-xs text-slate-500">No stress reports yet for selected module.</p>
+              ) : (
+                stressReports.slice(0, 20).map((report) => (
+                  <div key={report.id} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-900">{report.module}</p>
+                        <p className="text-[11px] text-slate-500">{new Date(report.createdAt).toLocaleString()}</p>
+                      </div>
+                      <span className={cn(
+                        "rounded-full border px-2 py-0.5 text-[10px]",
+                        report.status === "completed"
+                          ? "border-success/30 bg-success/10 text-success"
+                          : report.status === "hardware_limit"
+                            ? "border-warn/30 bg-warn/10 text-warn"
+                            : "border-danger/30 bg-danger/10 text-danger",
+                      )}>
+                        {report.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-700">
+                      safeClose={report.closedSafely ? "yes" : "no"} · attempts={report.recovery.attempts} · resumed={report.recovery.resumed ? "yes" : "no"}
+                    </p>
+                    <p className="text-[11px] text-slate-600">{report.terminationReason}</p>
+                    <p className="text-[11px] text-slate-600">
+                      p95 latency={report.summary.p95LatencyMs}ms · peak loss={report.summary.peakPacketLossPct}%
+                    </p>
+                    {report.recovery.events.length > 0 ? (
+                      <div className="mt-1 text-[10px] text-slate-500">
+                        last event: {report.recovery.events[report.recovery.events.length - 1]?.kind}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}

@@ -25,11 +25,13 @@ describe("secaudit stress routes", () => {
       status: string;
       closedSafely: boolean;
       summary: { avgLatencyMs: number; avgPacketLossPct: number; avgResponseTimeMs: number; samples: number };
+      recovery: { attempts: number; resumed: boolean; events: Array<{ kind: string }> };
     };
     expect(report.id).toMatch(/^secaudit_stress_/);
     expect(report.module).toBe("ethernet_resilience");
     expect(report.closedSafely).toBe(true);
     expect(report.summary.samples).toBeGreaterThan(0);
+    expect(report.recovery.attempts).toBeGreaterThanOrEqual(0);
 
     const list = await app.inject({ method: "GET", url: "/api/v1/secaudit/stress/reports?tenantId=tenant-1" });
     expect(list.statusCode).toBe(200);
@@ -39,6 +41,61 @@ describe("secaudit stress routes", () => {
 
     const byId = await app.inject({ method: "GET", url: `/api/v1/secaudit/stress/reports/${report.id}` });
     expect(byId.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("supports configurable stop and auto-resume recovery policy", async () => {
+    const app = buildApp();
+
+    const run = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/stress/ethernet-resilience",
+      payload: {
+        tenantId: "tenant-3",
+        operatorId: "operator-3",
+        endpointId: "endpoint-3",
+        iterations: 10,
+        expectedBandwidthMbps: 900,
+        saturationThresholdPct: 97,
+        recoveryPolicy: {
+          autoResumeEnabled: true,
+          stopThresholds: {
+            latencyMs: 1,
+          },
+          resumeDelayMs: 0,
+          resumeBackoffMs: 0,
+          maxResumeAttempts: 1,
+          resumeProbeSamples: 2,
+          resumeHealthySamplesRequired: 2,
+          resumeThresholds: {
+            latencyMs: 1,
+          },
+        },
+      },
+    });
+
+    expect(run.statusCode).toBe(201);
+    const report = run.json() as {
+      status: "completed" | "hardware_limit" | "failed";
+      closedSafely: boolean;
+      terminationReason: string;
+      recovery: {
+        attempts: number;
+        policy: { autoResumeEnabled: boolean; maxResumeAttempts: number; stopThresholds?: { latencyMs?: number } };
+        events: Array<{ kind: string }>;
+      };
+    };
+
+    expect(report.status).toBe("hardware_limit");
+    expect(report.closedSafely).toBe(true);
+    expect(report.recovery.policy.autoResumeEnabled).toBe(true);
+    expect(report.recovery.policy.maxResumeAttempts).toBe(1);
+    expect(report.recovery.policy.stopThresholds?.latencyMs).toBe(1);
+    expect(report.recovery.attempts).toBe(1);
+    expect(report.recovery.events.some((event) => event.kind === "resume_attempt")).toBe(true);
+    expect(report.recovery.events.some((event) => event.kind === "resume_exhausted")).toBe(true);
+    expect(typeof report.terminationReason).toBe("string");
 
     await app.close();
   });
@@ -67,12 +124,14 @@ describe("secaudit stress routes", () => {
       closedSafely: boolean;
       metrics: Array<{ associationCapacityPct?: number; latencyMs: number; packetLossPct: number; responseTimeMs: number }>;
       terminationReason: string;
+      recovery: { policy: { autoResumeEnabled: boolean } };
     };
     expect(report.module).toBe("wireless_density");
     expect(["completed", "hardware_limit", "failed"]).toContain(report.status);
     expect(report.closedSafely).toBe(true);
     expect(report.metrics.length).toBeGreaterThan(0);
     expect(typeof report.terminationReason).toBe("string");
+    expect(typeof report.recovery.policy.autoResumeEnabled).toBe("boolean");
 
     const list = await app.inject({ method: "GET", url: "/api/v1/secaudit/stress/reports?tenantId=tenant-2&module=wireless_density" });
     expect(list.statusCode).toBe(200);

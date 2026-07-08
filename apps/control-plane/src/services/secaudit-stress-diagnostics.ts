@@ -2,6 +2,8 @@ import {
   InMemorySecAuditStressStore,
   type SecAuditStressReport,
   type StressMetricSample,
+  type StressRecoveryEvent,
+  type StressRecoveryPolicy,
   type StressSummary,
 } from "../domain/secaudit-stress-store.js";
 
@@ -17,6 +19,7 @@ type BaseStressInput = {
   operatorId: string;
   endpointId: string;
   iterations?: number;
+  recoveryPolicy?: Partial<StressRecoveryPolicy>;
 };
 
 export type EthernetResilienceInput = BaseStressInput & {
@@ -75,6 +78,61 @@ function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeRecoveryPolicy(policy?: Partial<StressRecoveryPolicy>): StressRecoveryPolicy {
+  const stopThresholds = policy?.stopThresholds;
+  const resumeThresholds = policy?.resumeThresholds;
+  return {
+    autoResumeEnabled: policy?.autoResumeEnabled ?? false,
+    stopThresholds: {
+      packetLossPct: Math.max(1, stopThresholds?.packetLossPct ?? 18),
+      latencyMs: Math.max(1, stopThresholds?.latencyMs ?? 320),
+      responseTimeMs: Math.max(1, stopThresholds?.responseTimeMs ?? 520),
+    },
+    resumeDelayMs: Math.max(0, policy?.resumeDelayMs ?? 2000),
+    resumeBackoffMs: Math.max(0, policy?.resumeBackoffMs ?? 1000),
+    maxResumeAttempts: Math.max(0, Math.min(20, policy?.maxResumeAttempts ?? 2)),
+    resumeProbeSamples: Math.max(1, Math.min(20, policy?.resumeProbeSamples ?? 2)),
+    resumeHealthySamplesRequired: Math.max(1, Math.min(20, policy?.resumeHealthySamplesRequired ?? 2)),
+    resumeThresholds: {
+      packetLossPct: Math.max(0.1, resumeThresholds?.packetLossPct ?? 6),
+      latencyMs: Math.max(1, resumeThresholds?.latencyMs ?? 140),
+      responseTimeMs: Math.max(1, resumeThresholds?.responseTimeMs ?? 240),
+    },
+  };
+}
+
+function isSampleOverThreshold(
+  sample: StressMetricSample,
+  thresholds: { packetLossPct?: number; latencyMs?: number; responseTimeMs?: number },
+): boolean {
+  if (typeof thresholds.packetLossPct === "number" && sample.packetLossPct >= thresholds.packetLossPct) return true;
+  if (typeof thresholds.latencyMs === "number" && sample.latencyMs >= thresholds.latencyMs) return true;
+  if (typeof thresholds.responseTimeMs === "number" && sample.responseTimeMs >= thresholds.responseTimeMs) return true;
+  return false;
+}
+
+async function probeRecovery(
+  runProbe: () => Promise<StressMetricSample>,
+  policy: StressRecoveryPolicy,
+): Promise<number> {
+  let healthy = 0;
+  for (let probe = 0; probe < policy.resumeProbeSamples; probe += 1) {
+    try {
+      const sample = await runProbe();
+      if (!isSampleOverThreshold(sample, policy.resumeThresholds)) {
+        healthy += 1;
+      }
+    } catch {
+      // Probe failure counts as unhealthy, continue probe loop.
+    }
+  }
+  return healthy;
+}
+
 const defaultEthernetCollector: EthernetCollector = async ({ iteration, expectedBandwidthMbps, saturationThresholdPct }) => {
   const jitter = Math.max(0.75, 1 - iteration * 0.01);
   const bandwidthMbps = randomBetween(expectedBandwidthMbps * 0.7, expectedBandwidthMbps * 1.05) * jitter;
@@ -130,23 +188,94 @@ export class SecAuditStressDiagnostics {
     const iterations = Math.max(1, Math.min(100, input.iterations ?? 12));
     const expectedBandwidthMbps = Math.max(50, input.expectedBandwidthMbps ?? 1000);
     const saturationThresholdPct = Math.max(65, Math.min(98, input.saturationThresholdPct ?? 88));
+    const recoveryPolicy = normalizeRecoveryPolicy(input.recoveryPolicy);
     const metrics: StressMetricSample[] = [];
+    const recoveryEvents: StressRecoveryEvent[] = [];
+    let recoveryAttempts = 0;
+    let resumed = false;
 
     let status: SecAuditStressReport["status"] = "completed";
     let terminationReason = "completed_all_iterations";
 
-    for (let i = 0; i < iterations; i += 1) {
+    for (let i = 0; i < iterations;) {
       try {
         const sample = await this.ethernetCollector({
           iteration: i,
           expectedBandwidthMbps,
           saturationThresholdPct,
         });
+        if (isSampleOverThreshold(sample, recoveryPolicy.stopThresholds)) {
+          throw new HardwareLimitError(
+            `ethernet_policy_stop packetLoss=${round2(sample.packetLossPct)} latency=${round2(sample.latencyMs)} response=${round2(sample.responseTimeMs)}`,
+          );
+        }
         metrics.push(sample);
+        i += 1;
       } catch (error) {
-        status = error instanceof HardwareLimitError ? "hardware_limit" : "failed";
-        terminationReason = error instanceof Error ? error.message : "unknown_error";
-        break;
+        const reason = error instanceof Error ? error.message : "unknown_error";
+        const hardwareLimit = error instanceof HardwareLimitError;
+        if (!hardwareLimit) {
+          status = "failed";
+          terminationReason = reason;
+          recoveryEvents.push({ kind: "stop", at: new Date().toISOString(), iteration: i, details: reason });
+          break;
+        }
+
+        recoveryEvents.push({ kind: "stop", at: new Date().toISOString(), iteration: i, details: reason });
+
+        if (!recoveryPolicy.autoResumeEnabled || recoveryAttempts >= recoveryPolicy.maxResumeAttempts) {
+          status = "hardware_limit";
+          terminationReason = reason;
+          recoveryEvents.push({ kind: "resume_exhausted", at: new Date().toISOString(), iteration: i, details: "resume_disabled_or_attempts_exhausted" });
+          break;
+        }
+
+        recoveryAttempts += 1;
+        const waitMs = recoveryPolicy.resumeDelayMs + recoveryPolicy.resumeBackoffMs * (recoveryAttempts - 1);
+        recoveryEvents.push({
+          kind: "resume_attempt",
+          at: new Date().toISOString(),
+          iteration: i,
+          details: "starting_resume_probe",
+          attempt: recoveryAttempts,
+          waitMs,
+        });
+        if (waitMs > 0) await sleep(waitMs);
+
+        const healthy = await probeRecovery(
+          () =>
+            this.ethernetCollector({
+              iteration: i,
+              expectedBandwidthMbps,
+              saturationThresholdPct,
+            }),
+          recoveryPolicy,
+        );
+
+        if (healthy >= recoveryPolicy.resumeHealthySamplesRequired) {
+          resumed = true;
+          recoveryEvents.push({
+            kind: "resume_success",
+            at: new Date().toISOString(),
+            iteration: i,
+            details: `healthy_probe_samples=${healthy}`,
+            attempt: recoveryAttempts,
+          });
+          continue;
+        }
+
+        if (recoveryAttempts >= recoveryPolicy.maxResumeAttempts) {
+          status = "hardware_limit";
+          terminationReason = `resume_exhausted_after_${recoveryAttempts}_attempts`;
+          recoveryEvents.push({
+            kind: "resume_exhausted",
+            at: new Date().toISOString(),
+            iteration: i,
+            details: `healthy_probe_samples=${healthy}`,
+            attempt: recoveryAttempts,
+          });
+          break;
+        }
       }
     }
 
@@ -160,6 +289,12 @@ export class SecAuditStressDiagnostics {
       closedSafely: true,
       summary: summarize(metrics),
       metrics,
+      recovery: {
+        policy: recoveryPolicy,
+        attempts: recoveryAttempts,
+        resumed,
+        events: recoveryEvents,
+      },
     });
   }
 
@@ -167,12 +302,16 @@ export class SecAuditStressDiagnostics {
     const iterations = Math.max(1, Math.min(120, input.iterations ?? 14));
     const expectedMaxClients = Math.max(10, input.expectedMaxClients ?? 150);
     const associationThresholdPct = Math.max(70, Math.min(100, input.associationThresholdPct ?? 92));
+    const recoveryPolicy = normalizeRecoveryPolicy(input.recoveryPolicy);
     const metrics: StressMetricSample[] = [];
+    const recoveryEvents: StressRecoveryEvent[] = [];
+    let recoveryAttempts = 0;
+    let resumed = false;
 
     let status: SecAuditStressReport["status"] = "completed";
     let terminationReason = "completed_all_iterations";
 
-    for (let i = 0; i < iterations; i += 1) {
+    for (let i = 0; i < iterations;) {
       try {
         const sample = await this.wirelessCollector({
           iteration: i,
@@ -180,11 +319,79 @@ export class SecAuditStressDiagnostics {
           expectedMaxClients,
           associationThresholdPct,
         });
+        if (isSampleOverThreshold(sample, recoveryPolicy.stopThresholds)) {
+          throw new HardwareLimitError(
+            `wireless_policy_stop packetLoss=${round2(sample.packetLossPct)} latency=${round2(sample.latencyMs)} response=${round2(sample.responseTimeMs)}`,
+          );
+        }
         metrics.push(sample);
+        i += 1;
       } catch (error) {
-        status = error instanceof HardwareLimitError ? "hardware_limit" : "failed";
-        terminationReason = error instanceof Error ? error.message : "unknown_error";
-        break;
+        const reason = error instanceof Error ? error.message : "unknown_error";
+        const hardwareLimit = error instanceof HardwareLimitError;
+        if (!hardwareLimit) {
+          status = "failed";
+          terminationReason = reason;
+          recoveryEvents.push({ kind: "stop", at: new Date().toISOString(), iteration: i, details: reason });
+          break;
+        }
+
+        recoveryEvents.push({ kind: "stop", at: new Date().toISOString(), iteration: i, details: reason });
+
+        if (!recoveryPolicy.autoResumeEnabled || recoveryAttempts >= recoveryPolicy.maxResumeAttempts) {
+          status = "hardware_limit";
+          terminationReason = reason;
+          recoveryEvents.push({ kind: "resume_exhausted", at: new Date().toISOString(), iteration: i, details: "resume_disabled_or_attempts_exhausted" });
+          break;
+        }
+
+        recoveryAttempts += 1;
+        const waitMs = recoveryPolicy.resumeDelayMs + recoveryPolicy.resumeBackoffMs * (recoveryAttempts - 1);
+        recoveryEvents.push({
+          kind: "resume_attempt",
+          at: new Date().toISOString(),
+          iteration: i,
+          details: "starting_resume_probe",
+          attempt: recoveryAttempts,
+          waitMs,
+        });
+        if (waitMs > 0) await sleep(waitMs);
+
+        const healthy = await probeRecovery(
+          () =>
+            this.wirelessCollector({
+              iteration: i,
+              apId: input.apId,
+              expectedMaxClients,
+              associationThresholdPct,
+            }),
+          recoveryPolicy,
+        );
+
+        if (healthy >= recoveryPolicy.resumeHealthySamplesRequired) {
+          resumed = true;
+          recoveryEvents.push({
+            kind: "resume_success",
+            at: new Date().toISOString(),
+            iteration: i,
+            details: `healthy_probe_samples=${healthy}`,
+            attempt: recoveryAttempts,
+          });
+          continue;
+        }
+
+        if (recoveryAttempts >= recoveryPolicy.maxResumeAttempts) {
+          status = "hardware_limit";
+          terminationReason = `resume_exhausted_after_${recoveryAttempts}_attempts`;
+          recoveryEvents.push({
+            kind: "resume_exhausted",
+            at: new Date().toISOString(),
+            iteration: i,
+            details: `healthy_probe_samples=${healthy}`,
+            attempt: recoveryAttempts,
+          });
+          break;
+        }
       }
     }
 
@@ -198,6 +405,12 @@ export class SecAuditStressDiagnostics {
       closedSafely: true,
       summary: summarize(metrics),
       metrics,
+      recovery: {
+        policy: recoveryPolicy,
+        attempts: recoveryAttempts,
+        resumed,
+        events: recoveryEvents,
+      },
     });
   }
 }

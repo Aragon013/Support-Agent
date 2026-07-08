@@ -89,6 +89,25 @@ type ClientFindingsBody = {
   evidence?: string[];
 };
 
+type StressRecoveryPolicyBody = {
+  autoResumeEnabled?: boolean;
+  stopThresholds?: {
+    packetLossPct?: number;
+    latencyMs?: number;
+    responseTimeMs?: number;
+  };
+  resumeDelayMs?: number;
+  resumeBackoffMs?: number;
+  maxResumeAttempts?: number;
+  resumeProbeSamples?: number;
+  resumeHealthySamplesRequired?: number;
+  resumeThresholds?: {
+    packetLossPct?: number;
+    latencyMs?: number;
+    responseTimeMs?: number;
+  };
+};
+
 type EthernetStressBody = {
   tenantId: string;
   operatorId: string;
@@ -96,6 +115,7 @@ type EthernetStressBody = {
   iterations?: number;
   expectedBandwidthMbps?: number;
   saturationThresholdPct?: number;
+  recoveryPolicy?: StressRecoveryPolicyBody;
 };
 
 type WirelessDensityBody = {
@@ -106,6 +126,7 @@ type WirelessDensityBody = {
   iterations?: number;
   expectedMaxClients?: number;
   associationThresholdPct?: number;
+  recoveryPolicy?: StressRecoveryPolicyBody;
 };
 
 type StressReportQuery = {
@@ -1164,6 +1185,7 @@ export function registerSecAuditRoutesWithDeps(
         ...(typeof body.iterations === "number" ? { iterations: body.iterations } : {}),
         ...(typeof body.expectedBandwidthMbps === "number" ? { expectedBandwidthMbps: body.expectedBandwidthMbps } : {}),
         ...(typeof body.saturationThresholdPct === "number" ? { saturationThresholdPct: body.saturationThresholdPct } : {}),
+        ...(typeof body.recoveryPolicy === "object" && body.recoveryPolicy ? { recoveryPolicy: body.recoveryPolicy } : {}),
       });
 
       auditStore.append({
@@ -1205,6 +1227,7 @@ export function registerSecAuditRoutesWithDeps(
         ...(typeof body.iterations === "number" ? { iterations: body.iterations } : {}),
         ...(typeof body.expectedMaxClients === "number" ? { expectedMaxClients: body.expectedMaxClients } : {}),
         ...(typeof body.associationThresholdPct === "number" ? { associationThresholdPct: body.associationThresholdPct } : {}),
+        ...(typeof body.recoveryPolicy === "object" && body.recoveryPolicy ? { recoveryPolicy: body.recoveryPolicy } : {}),
       });
 
       auditStore.append({
