@@ -64,6 +64,11 @@ type AuditRemediation = {
   title: string;
   priority: Exclude<Severity, "info">;
   actions: string[];
+  tracking?: {
+    status: "open" | "accepted" | "closed";
+    notes?: string;
+    updatedAt?: string;
+  };
 };
 
 type AuditReport = {
@@ -655,6 +660,25 @@ export function SecAuditPanel() {
     }
   };
 
+  const updateRemediationStatus = async (moduleId: string, status: "open" | "accepted" | "closed") => {
+    if (!activePlanId) return;
+    try {
+      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${activePlanId}/remediations/${moduleId}`), {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) {
+        throw new Error(`remediation_http_${response.status}`);
+      }
+      await loadReport(activePlanId);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to update remediation status");
+    }
+  };
+
   const runAudit = async () => {
     if (selectedModules.length === 0) {
       setRunError("Select at least one module before running the audit.");
@@ -1041,15 +1065,40 @@ export function SecAuditPanel() {
                           <p className="text-xs font-semibold text-slate-900">{item.title}</p>
                           <p className="text-[11px] text-slate-500">{item.moduleId}</p>
                         </div>
-                        <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", SEVERITY_STYLE[item.priority])}>
-                          {item.priority}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", SEVERITY_STYLE[item.priority])}>
+                            {item.priority}
+                          </span>
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+                            {item.tracking?.status ?? "open"}
+                          </span>
+                        </div>
                       </div>
                       <ul className="mt-2 space-y-1 text-[11px] text-slate-700">
                         {item.actions.slice(0, 3).map((action) => (
                           <li key={action}>- {action}</li>
                         ))}
                       </ul>
+                      <div className="mt-2 flex gap-1.5 text-[10px]">
+                        <button
+                          onClick={() => updateRemediationStatus(item.moduleId, "accepted")}
+                          className="rounded border border-warn/30 bg-warn/10 px-2 py-1 text-warn"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          onClick={() => updateRemediationStatus(item.moduleId, "closed")}
+                          className="rounded border border-success/30 bg-success/10 px-2 py-1 text-success"
+                        >
+                          Close
+                        </button>
+                        <button
+                          onClick={() => updateRemediationStatus(item.moduleId, "open")}
+                          className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600"
+                        >
+                          Reopen
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

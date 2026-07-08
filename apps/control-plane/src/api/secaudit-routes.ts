@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
 
 import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
@@ -18,6 +19,66 @@ type CreatePlanBody = {
 type IdParams = { id: string };
 
 type TenantQuery = { tenantId?: string };
+
+type BatchCreateBody = {
+  tenantId: string;
+  operatorId: string;
+  packageId: string;
+  targetOs: "windows" | "linux" | "macos" | "all";
+  executionLevel: SecAuditExecutionLevel;
+  modules: string[];
+  endpointIds: string[];
+};
+
+type ScheduleCreateBody = {
+  tenantId: string;
+  operatorId: string;
+  endpointId: string;
+  packageId: string;
+  targetOs: "windows" | "linux" | "macos" | "all";
+  executionLevel: SecAuditExecutionLevel;
+  modules: string[];
+  intervalMinutes?: number;
+};
+
+type RemediationStatus = "open" | "accepted" | "closed";
+
+type RemediationUpdateBody = {
+  status?: RemediationStatus;
+  notes?: string;
+};
+
+type BatchRecord = {
+  id: string;
+  tenantId: string;
+  operatorId: string;
+  endpointIds: string[];
+  planIds: string[];
+  createdAt: string;
+  status: "running" | "completed" | "partial" | "failed";
+};
+
+type ScheduleRecord = {
+  id: string;
+  tenantId: string;
+  operatorId: string;
+  endpointId: string;
+  packageId: string;
+  targetOs: "windows" | "linux" | "macos" | "all";
+  executionLevel: SecAuditExecutionLevel;
+  modules: string[];
+  intervalMinutes: number;
+  nextRunAt: string;
+  createdAt: string;
+};
+
+type RemediationState = {
+  planId: string;
+  moduleId: string;
+  status: RemediationStatus;
+  notes?: string;
+  updatedAt: string;
+};
 
 type ClientFindingsBody = {
   moduleId: string;
@@ -112,11 +173,190 @@ export function registerSecAuditRoutes(app: FastifyInstance): void {
 
 export function registerSecAuditRoutesWithDeps(
   app: FastifyInstance,
-  deps: { auditStore?: InMemoryAuditLogStore; requireAdminKey?: PreHandlerFn },
+  deps: { auditStore?: InMemoryAuditLogStore; requireAdminKey?: PreHandlerFn; planStore?: InMemorySecAuditPlanStore },
 ): void {
-  const store = new InMemorySecAuditPlanStore();
+  const store = deps.planStore ?? new InMemorySecAuditPlanStore();
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
   const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
+  const batches = new Map<string, BatchRecord>();
+  const schedules = new Map<string, ScheduleRecord>();
+  const remediationStates = new Map<string, RemediationState>();
+
+  const remediationKey = (planId: string, moduleId: string) => `${planId}:${moduleId}`;
+
+  const getRemediationStatus = (planId: string, moduleId: string) => remediationStates.get(remediationKey(planId, moduleId));
+
+  const runPlan = async (planId: string) => {
+    const plan = store.getById(planId);
+    if (!plan) return null;
+
+    store.update(plan.id, (draft) => {
+      draft.status = "running";
+      draft.results = draft.results.map((result) => (
+        result.origin === "client_network"
+          ? { ...result, status: result.findings ? "completed" : "client_required", updatedAt: new Date().toISOString() }
+          : { ...result, status: "running", updatedAt: new Date().toISOString() }
+      ));
+    });
+
+    for (const result of plan.results) {
+      if (result.origin === "client_network") continue;
+
+      const mapped = mapModuleToCommand(result.moduleId);
+      if (!mapped) {
+        store.update(plan.id, (draft) => {
+          const item = draft.results.find((x) => x.moduleId === result.moduleId);
+          if (item) {
+            item.status = "failed";
+            item.error = "module_not_mapped";
+            item.updatedAt = new Date().toISOString();
+          }
+        });
+        continue;
+      }
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/commands/jobs",
+        headers: {
+          "content-type": "application/json",
+          "x-operator-role": "tech",
+          "x-endpoint-status": "online",
+          "x-endpoint-license-status": "active",
+          "x-endpoint-install-profile": "support_full",
+          "x-mfa-verified": "true",
+          "x-command-local-runner": "true",
+        },
+        payload: {
+          tenantId: plan.tenantId,
+          endpointId: plan.endpointId,
+          operatorId: plan.operatorId,
+          catalogCommandId: mapped.commandId,
+          requestedParams: mapped.requestedParams,
+        },
+      });
+
+      const body = response.json() as { id?: string; reason?: string };
+
+      store.update(plan.id, (draft) => {
+        const item = draft.results.find((x) => x.moduleId === result.moduleId);
+        if (!item) return;
+
+        if ((response.statusCode === 201 || response.statusCode === 202) && body.id) {
+          item.commandJobId = body.id;
+          item.status = "running";
+          item.updatedAt = new Date().toISOString();
+        } else {
+          item.status = "failed";
+          item.error = body.reason ?? `http_${response.statusCode}`;
+          item.updatedAt = new Date().toISOString();
+        }
+      });
+    }
+
+    const updated = store.getById(plan.id);
+    if (!updated) return null;
+    return {
+      id: updated.id,
+      status: updated.status,
+      modules: updated.results,
+    };
+  };
+
+  const refreshPlan = async (planId: string) => {
+    const plan = store.getById(planId);
+    if (!plan) return null;
+
+    for (const result of plan.results) {
+      if (!result.commandJobId) continue;
+
+      const job = await app.inject({
+        method: "GET",
+        url: `/api/v1/commands/jobs/${result.commandJobId}`,
+      });
+
+      if (job.statusCode < 200 || job.statusCode >= 300) continue;
+      const body = job.json() as { status?: string };
+      const status = body.status;
+
+      const terminalOk = status === "completed";
+      const terminalFail = status === "failed" || status === "blocked" || status === "cancelled";
+      if (!terminalOk && !terminalFail) continue;
+
+      const transcript = await app.inject({
+        method: "GET",
+        url: `/api/v1/commands/jobs/${result.commandJobId}/channel-messages`,
+      });
+
+      const transcriptBody = transcript.statusCode >= 200 && transcript.statusCode < 300
+        ? (transcript.json() as { items?: Array<{ kind: string; chunk?: string; reason?: string; exitCode?: number }> })
+        : { items: [] };
+
+      const evidence = (transcriptBody.items ?? []).flatMap((item) => {
+        if (item.kind === "command.stdout" || item.kind === "command.stderr") return item.chunk ? [item.chunk] : [];
+        if (item.kind === "command.abort") return item.reason ? [`abort=${item.reason}`] : [];
+        if (item.kind === "command.exit") return [typeof item.exitCode === "number" ? `exitCode=${item.exitCode}` : "exitCode=unknown"];
+        return [];
+      }).slice(0, 40);
+
+      store.update(plan.id, (draft) => {
+        const target = draft.results.find((x) => x.moduleId === result.moduleId);
+        if (!target) return;
+        target.status = terminalOk ? "completed" : "failed";
+        target.evidence = evidence;
+        target.findings = {
+          severity: toSeverity(result.moduleId),
+          status: terminalOk ? "ok" : "issue",
+          signalCount: evidence.length,
+        };
+        target.updatedAt = new Date().toISOString();
+      });
+    }
+
+    const refreshed = store.getById(plan.id);
+    if (!refreshed) return null;
+
+    const completed = refreshed.results.every((x) => x.status === "completed");
+    const failedAny = refreshed.results.some((x) => x.status === "failed");
+    const runningAny = refreshed.results.some((x) => x.status === "running" || x.status === "pending");
+    const clientPending = refreshed.results.some((x) => x.status === "client_required");
+
+    const nextStatus = completed
+      ? "completed"
+      : failedAny
+        ? (runningAny || clientPending ? "partial" : "failed")
+        : (runningAny || clientPending ? "running" : "partial");
+
+    store.update(plan.id, (draft) => {
+      draft.status = nextStatus;
+    });
+
+    return store.getById(plan.id) ?? null;
+  };
+
+  const schedulerTimer = setInterval(async () => {
+    const now = Date.now();
+    for (const schedule of schedules.values()) {
+      if (new Date(schedule.nextRunAt).getTime() > now) continue;
+      const created = store.create({
+        tenantId: schedule.tenantId,
+        endpointId: schedule.endpointId,
+        operatorId: schedule.operatorId,
+        packageId: schedule.packageId,
+        targetOs: schedule.targetOs,
+        executionLevel: schedule.executionLevel,
+        modules: schedule.modules,
+      });
+      await runPlan(created.id);
+      schedule.nextRunAt = new Date(now + schedule.intervalMinutes * 60_000).toISOString();
+      schedules.set(schedule.id, schedule);
+    }
+  }, 30_000);
+
+  app.addHook("onClose", (_instance, done) => {
+    clearInterval(schedulerTimer);
+    done();
+  });
 
   app.post(
     "/api/v1/secaudit/plans",
@@ -156,85 +396,15 @@ export function registerSecAuditRoutesWithDeps(
   app.post(
     "/api/v1/secaudit/plans/:id/run",
     async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
-      const plan = store.getById(req.params.id);
-      if (!plan) {
-        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
-      }
-
-      store.update(plan.id, (draft) => {
-        draft.status = "running";
-        draft.results = draft.results.map((result) => (
-          result.origin === "client_network"
-            ? { ...result, status: result.findings ? "completed" : "client_required", updatedAt: new Date().toISOString() }
-            : { ...result, status: "running", updatedAt: new Date().toISOString() }
-        ));
-      });
-
-      for (const result of plan.results) {
-        if (result.origin === "client_network") {
-          continue;
-        }
-
-        const mapped = mapModuleToCommand(result.moduleId);
-        if (!mapped) {
-          store.update(plan.id, (draft) => {
-            const item = draft.results.find((x) => x.moduleId === result.moduleId);
-            if (item) {
-              item.status = "failed";
-              item.error = "module_not_mapped";
-              item.updatedAt = new Date().toISOString();
-            }
-          });
-          continue;
-        }
-
-        const response = await app.inject({
-          method: "POST",
-          url: "/api/v1/commands/jobs",
-          headers: {
-            "content-type": "application/json",
-            "x-operator-role": "tech",
-            "x-endpoint-status": "online",
-            "x-endpoint-license-status": "active",
-            "x-endpoint-install-profile": "support_full",
-            "x-mfa-verified": "true",
-          },
-          payload: {
-            tenantId: plan.tenantId,
-            endpointId: plan.endpointId,
-            operatorId: plan.operatorId,
-            catalogCommandId: mapped.commandId,
-            requestedParams: mapped.requestedParams,
-          },
-        });
-
-        const body = response.json() as { id?: string; status?: string; reason?: string };
-
-        store.update(plan.id, (draft) => {
-          const item = draft.results.find((x) => x.moduleId === result.moduleId);
-          if (!item) return;
-
-          if ((response.statusCode === 201 || response.statusCode === 202) && body.id) {
-            item.commandJobId = body.id;
-            item.status = "running";
-            item.updatedAt = new Date().toISOString();
-          } else {
-            item.status = "failed";
-            item.error = body.reason ?? `http_${response.statusCode}`;
-            item.updatedAt = new Date().toISOString();
-          }
-        });
-      }
-
-      const updated = store.getById(plan.id);
+      const updated = await runPlan(req.params.id);
       if (!updated) {
-        return reply.code(500).send({ code: "internal_error", message: "plan disappeared after run" });
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
       }
 
       return reply.code(200).send({
         id: updated.id,
         status: updated.status,
-        modules: updated.results,
+        modules: updated.modules,
       });
     },
   );
@@ -278,80 +448,11 @@ export function registerSecAuditRoutesWithDeps(
   app.get(
     "/api/v1/secaudit/plans/:id/results",
     async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
-      const plan = store.getById(req.params.id);
-      if (!plan) {
+      const latest = await refreshPlan(req.params.id);
+      if (!latest) {
         return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
       }
 
-      for (const result of plan.results) {
-        if (!result.commandJobId) continue;
-
-        const job = await app.inject({
-          method: "GET",
-          url: `/api/v1/commands/jobs/${result.commandJobId}`,
-        });
-
-        if (job.statusCode < 200 || job.statusCode >= 300) continue;
-        const body = job.json() as { status?: string };
-        const status = body.status;
-
-        const terminalOk = status === "completed";
-        const terminalFail = status === "failed" || status === "blocked" || status === "cancelled";
-
-        if (!terminalOk && !terminalFail) {
-          continue;
-        }
-
-        const transcript = await app.inject({
-          method: "GET",
-          url: `/api/v1/commands/jobs/${result.commandJobId}/channel-messages`,
-        });
-        const transcriptBody = transcript.statusCode >= 200 && transcript.statusCode < 300
-          ? (transcript.json() as { items?: Array<{ kind: string; chunk?: string; reason?: string; exitCode?: number }> })
-          : { items: [] };
-
-        const evidence = (transcriptBody.items ?? []).flatMap((item) => {
-          if (item.kind === "command.stdout" || item.kind === "command.stderr") return item.chunk ? [item.chunk] : [];
-          if (item.kind === "command.abort") return item.reason ? [`abort=${item.reason}`] : [];
-          if (item.kind === "command.exit") return [typeof item.exitCode === "number" ? `exitCode=${item.exitCode}` : "exitCode=unknown"];
-          return [];
-        }).slice(0, 40);
-
-        store.update(plan.id, (draft) => {
-          const target = draft.results.find((x) => x.moduleId === result.moduleId);
-          if (!target) return;
-          target.status = terminalOk ? "completed" : "failed";
-          target.evidence = evidence;
-          target.findings = {
-            severity: toSeverity(result.moduleId),
-            status: terminalOk ? "ok" : "issue",
-            signalCount: evidence.length,
-          };
-          target.updatedAt = new Date().toISOString();
-        });
-      }
-
-      const refreshed = store.getById(plan.id);
-      if (!refreshed) {
-        return reply.code(500).send({ code: "internal_error", message: "plan disappeared during refresh" });
-      }
-
-      const completed = refreshed.results.every((x) => x.status === "completed");
-      const failedAny = refreshed.results.some((x) => x.status === "failed");
-      const runningAny = refreshed.results.some((x) => x.status === "running" || x.status === "pending");
-      const clientPending = refreshed.results.some((x) => x.status === "client_required");
-
-      const nextStatus = completed
-        ? "completed"
-        : failedAny
-          ? (runningAny || clientPending ? "partial" : "failed")
-          : (runningAny || clientPending ? "running" : "partial");
-
-      store.update(plan.id, (draft) => {
-        draft.status = nextStatus;
-      });
-
-      const latest = store.getById(plan.id)!;
       return reply.code(200).send({
         id: latest.id,
         status: latest.status,
@@ -378,8 +479,74 @@ export function registerSecAuditRoutesWithDeps(
       }
 
       const report = buildSecAuditReport(plan);
+      const remediations = report.remediations.map((item) => {
+        const state = getRemediationStatus(plan.id, item.moduleId);
+        return {
+          ...item,
+          tracking: {
+            status: state?.status ?? "open",
+            notes: state?.notes,
+            updatedAt: state?.updatedAt,
+          },
+        };
+      });
 
-      return reply.code(200).send(report);
+      return reply.code(200).send({ ...report, remediations });
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/plans/:id/remediations",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const plan = store.getById(req.params.id);
+      if (!plan) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+      const report = buildSecAuditReport(plan);
+      const items = report.remediations.map((item) => {
+        const state = getRemediationStatus(plan.id, item.moduleId);
+        return {
+          ...item,
+          status: state?.status ?? "open",
+          notes: state?.notes,
+          updatedAt: state?.updatedAt,
+        };
+      });
+      return reply.code(200).send({ items, count: items.length });
+    },
+  );
+
+  app.patch(
+    "/api/v1/secaudit/plans/:id/remediations/:moduleId",
+    async (req: FastifyRequest<{ Params: { id: string; moduleId: string }; Body: RemediationUpdateBody }>, reply: FastifyReply) => {
+      const plan = store.getById(req.params.id);
+      if (!plan) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+
+      const report = buildSecAuditReport(plan);
+      const exists = report.remediations.some((item) => item.moduleId === req.params.moduleId);
+      if (!exists) {
+        return reply.code(404).send({ code: "not_found", message: "remediation module not found in plan" });
+      }
+
+      const status = req.body?.status;
+      if (status && status !== "open" && status !== "accepted" && status !== "closed") {
+        return reply.code(422).send({ code: "validation_error", message: "status must be open | accepted | closed" });
+      }
+
+      const key = remediationKey(req.params.id, req.params.moduleId);
+      const current = remediationStates.get(key);
+      const next: RemediationState = {
+        planId: req.params.id,
+        moduleId: req.params.moduleId,
+        status: status ?? current?.status ?? "open",
+        notes: req.body?.notes ?? current?.notes,
+        updatedAt: new Date().toISOString(),
+      };
+      remediationStates.set(key, next);
+
+      return reply.code(200).send(next);
     },
   );
 
@@ -428,6 +595,150 @@ export function registerSecAuditRoutesWithDeps(
         return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
       }
       return reply.code(200).send(comparison);
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/batches",
+    async (req: FastifyRequest<{ Body: BatchCreateBody }>, reply: FastifyReply) => {
+      const body = req.body;
+      if (
+        !body ||
+        !isNonEmptyString(body.tenantId) ||
+        !isNonEmptyString(body.operatorId) ||
+        !isNonEmptyString(body.packageId) ||
+        !Array.isArray(body.modules) ||
+        !Array.isArray(body.endpointIds) ||
+        body.endpointIds.length === 0
+      ) {
+        return reply.code(422).send({ code: "validation_error", message: "tenantId, operatorId, packageId, modules and endpointIds are required" });
+      }
+
+      const planIds: string[] = [];
+      for (const endpointId of body.endpointIds) {
+        if (!isNonEmptyString(endpointId)) continue;
+        const plan = store.create({
+          tenantId: body.tenantId,
+          endpointId,
+          operatorId: body.operatorId,
+          packageId: body.packageId,
+          targetOs: body.targetOs,
+          executionLevel: body.executionLevel,
+          modules: body.modules,
+        });
+        planIds.push(plan.id);
+        void runPlan(plan.id);
+      }
+
+      const batch: BatchRecord = {
+        id: `secaudit_batch_${randomUUID()}`,
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        endpointIds: body.endpointIds,
+        planIds,
+        createdAt: new Date().toISOString(),
+        status: "running",
+      };
+      batches.set(batch.id, batch);
+      return reply.code(201).send(batch);
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/batches/:id",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const batch = batches.get(req.params.id);
+      if (!batch) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit batch not found" });
+      }
+
+      const plans = batch.planIds.map((id) => store.getById(id)).filter((x): x is NonNullable<typeof x> => Boolean(x));
+      const completed = plans.filter((p) => p.status === "completed").length;
+      const failed = plans.filter((p) => p.status === "failed").length;
+      const partial = plans.filter((p) => p.status === "partial").length;
+      const running = plans.filter((p) => p.status === "running" || p.status === "draft").length;
+
+      const nextStatus: BatchRecord["status"] = completed === plans.length
+        ? "completed"
+        : failed === plans.length
+          ? "failed"
+          : (partial > 0 || failed > 0) && completed > 0
+            ? "partial"
+            : "running";
+
+      const updated = { ...batch, status: nextStatus };
+      batches.set(updated.id, updated);
+
+      return reply.code(200).send({
+        ...updated,
+        summary: {
+          total: plans.length,
+          completed,
+          failed,
+          partial,
+          running,
+        },
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/schedules",
+    async (req: FastifyRequest<{ Body: ScheduleCreateBody }>, reply: FastifyReply) => {
+      const body = req.body;
+      if (
+        !body ||
+        !isNonEmptyString(body.tenantId) ||
+        !isNonEmptyString(body.operatorId) ||
+        !isNonEmptyString(body.endpointId) ||
+        !isNonEmptyString(body.packageId) ||
+        !Array.isArray(body.modules) ||
+        body.modules.length === 0
+      ) {
+        return reply.code(422).send({ code: "validation_error", message: "tenantId, operatorId, endpointId, packageId and modules are required" });
+      }
+
+      const intervalMinutes = Number(body.intervalMinutes ?? 60);
+      if (!Number.isFinite(intervalMinutes) || intervalMinutes < 5) {
+        return reply.code(422).send({ code: "validation_error", message: "intervalMinutes must be >= 5" });
+      }
+
+      const now = Date.now();
+      const schedule: ScheduleRecord = {
+        id: `secaudit_sched_${randomUUID()}`,
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        endpointId: body.endpointId,
+        packageId: body.packageId,
+        targetOs: body.targetOs,
+        executionLevel: body.executionLevel,
+        modules: body.modules,
+        intervalMinutes,
+        createdAt: new Date(now).toISOString(),
+        nextRunAt: new Date(now + intervalMinutes * 60_000).toISOString(),
+      };
+      schedules.set(schedule.id, schedule);
+      return reply.code(201).send(schedule);
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/schedules",
+    async (_req: FastifyRequest, reply: FastifyReply) => {
+      const items = Array.from(schedules.values()).sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
+      return reply.code(200).send({ items, count: items.length });
+    },
+  );
+
+  app.delete(
+    "/api/v1/secaudit/schedules/:id",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const exists = schedules.has(req.params.id);
+      if (!exists) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit schedule not found" });
+      }
+      schedules.delete(req.params.id);
+      return reply.code(200).send({ id: req.params.id, deleted: true });
     },
   );
 

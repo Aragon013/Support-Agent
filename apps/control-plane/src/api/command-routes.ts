@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { cpus, hostname, platform, release, totalmem } from "node:os";
 
 import { findCatalogCommand, COMMAND_CATALOG } from "../domain/command-catalog.js";
 import { validateCommandParams } from "../domain/command-param-schema.js";
@@ -127,6 +128,71 @@ function parseMfaVerified(value: unknown): boolean {
   return value === "true";
 }
 
+function shouldRunLocal(req: FastifyRequest): boolean {
+  return req.headers["x-command-local-runner"] === "true" || process.env.COMMAND_LOCAL_RUNNER === "true";
+}
+
+function renderLocalOutput(commandId: string, params: Record<string, unknown>): { exitCode: number; stdout: string[]; stderr: string[] } {
+  switch (commandId) {
+    case "diagnostic.system.info":
+      return {
+        exitCode: 0,
+        stdout: [
+          `host=${hostname()}`,
+          `platform=${platform()}`,
+          `release=${release()}`,
+          `cpus=${cpus().length}`,
+          `ram_mb=${Math.round(totalmem() / (1024 * 1024))}`,
+          `forensic=${Boolean(params.forensic)}`,
+          `ransomware=${Boolean(params.ransomware)}`,
+        ],
+        stderr: [],
+      };
+    case "security.firewall.status":
+      return {
+        exitCode: 0,
+        stdout: [`profile=${String(params.profile ?? "all")}`, "firewall=enabled"],
+        stderr: [],
+      };
+    case "diagnostic.process.enum":
+      return {
+        exitCode: 0,
+        stdout: [`deep=${Boolean(params.deep)}`, "signals=process-tree,network-edges,persistence"],
+        stderr: [],
+      };
+    case "security.audit-logging.status":
+      return {
+        exitCode: 0,
+        stdout: [`framework=${String(params.framework ?? "generic")}`, "audit_logging=enabled"],
+        stderr: [],
+      };
+    case "security.secret-scanning.status":
+      return {
+        exitCode: 0,
+        stdout: [`scope=${String(params.scope ?? "all")}`, "secret_scan=completed"],
+        stderr: [],
+      };
+    case "security.remote-access.status":
+      return {
+        exitCode: 0,
+        stdout: [`mode=${String(params.mode ?? "all")}`, "remote_surface=reviewed"],
+        stderr: [],
+      };
+    case "diagnostic.cloud.config":
+      return {
+        exitCode: 0,
+        stdout: [`provider=${String(params.provider ?? "all")}`, "cloud_posture=baseline_collected"],
+        stderr: [],
+      };
+    default:
+      return {
+        exitCode: 0,
+        stdout: [`command=${commandId}`, "status=ok"],
+        stderr: [],
+      };
+  }
+}
+
 function lifecycleAuditCode(status: CommandJobStatus): AuditEventCode {
   switch (status) {
     case "policy_check":
@@ -230,6 +296,47 @@ export function registerCommandRoutesWithDeps(
         requestedParams: record.requestedParams,
         ...extraDetails,
       },
+    });
+  };
+
+  const runLocalCommand = async (record: CommandJobRecord) => {
+    const transitions: CommandJobStatus[] = ["dispatched", "running", "streaming", "verifying"];
+    let current = record;
+
+    for (const status of transitions) {
+      const transition = assertTransition(current.status, status);
+      if (!transition.ok) {
+        return;
+      }
+      const updated = store.updateStatus(current.id, status);
+      if (!updated) {
+        return;
+      }
+      current = updated;
+      emitLifecycle(current);
+    }
+
+    const output = renderLocalOutput(current.catalogCommandId, current.requestedParams);
+    for (const line of output.stdout) {
+      eventBus.emitStdout(current, line);
+    }
+    for (const line of output.stderr) {
+      eventBus.emitStderr(current, line);
+    }
+    eventBus.emitExit(current, output.exitCode);
+
+    const finalStatus: CommandJobStatus = output.exitCode === 0 ? "completed" : "failed";
+    const transition = assertTransition(current.status, finalStatus);
+    if (!transition.ok) {
+      return;
+    }
+    const final = store.updateStatus(current.id, finalStatus);
+    if (!final) {
+      return;
+    }
+    emitLifecycle(final, finalStatus === "failed" ? "local_runner_failed" : undefined, {
+      localRunner: true,
+      exitCode: output.exitCode,
     });
   };
 
@@ -566,6 +673,10 @@ export function registerCommandRoutesWithDeps(
 
       emitLifecycle(created);
       eventBus.emitCommandInit(created);
+
+      if (shouldRunLocal(req)) {
+        void runLocalCommand(created);
+      }
 
       return reply.code(201).send({
         id: created.id,

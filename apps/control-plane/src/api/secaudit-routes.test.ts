@@ -359,6 +359,89 @@ describe("secaudit routes", () => {
     await app.close();
   });
 
+  it("supports remediation tracking, batch execution, and schedules", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-ops",
+        endpointId: "endpoint-tracking",
+        operatorId: "operator-ops",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["net.client-health"],
+      },
+    });
+    const plan = create.json() as { id: string };
+
+    await app.inject({ method: "POST", url: `/api/v1/secaudit/plans/${plan.id}/run` });
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan.id}/client-findings`,
+      payload: { moduleId: "net.client-health", findings: { status: "ok", severity: "medium" }, evidence: ["lat=23ms"] },
+    });
+
+    const remPatch = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/secaudit/plans/${plan.id}/remediations/net.client-health`,
+      payload: { status: "accepted", notes: "will fix in next maintenance window" },
+    });
+    expect(remPatch.statusCode).toBe(200);
+    const remBody = remPatch.json() as { status: string; notes?: string };
+    expect(remBody.status).toBe("accepted");
+    expect(remBody.notes).toContain("maintenance");
+
+    const batchCreate = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/batches",
+      payload: {
+        tenantId: "tenant-ops",
+        operatorId: "operator-ops",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["host.os-posture"],
+        endpointIds: ["endpoint-a", "endpoint-b"],
+      },
+    });
+    expect(batchCreate.statusCode).toBe(201);
+    const batch = batchCreate.json() as { id: string; planIds: string[] };
+    expect(batch.planIds).toHaveLength(2);
+
+    const batchGet = await app.inject({ method: "GET", url: `/api/v1/secaudit/batches/${batch.id}` });
+    expect(batchGet.statusCode).toBe(200);
+
+    const schedCreate = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/schedules",
+      payload: {
+        tenantId: "tenant-ops",
+        operatorId: "operator-ops",
+        endpointId: "endpoint-sched",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["host.os-posture"],
+        intervalMinutes: 15,
+      },
+    });
+    expect(schedCreate.statusCode).toBe(201);
+    const sched = schedCreate.json() as { id: string };
+
+    const schedList = await app.inject({ method: "GET", url: "/api/v1/secaudit/schedules" });
+    expect(schedList.statusCode).toBe(200);
+    const listBody = schedList.json() as { count: number };
+    expect(listBody.count).toBeGreaterThan(0);
+
+    const schedDelete = await app.inject({ method: "DELETE", url: `/api/v1/secaudit/schedules/${sched.id}` });
+    expect(schedDelete.statusCode).toBe(200);
+
+    await app.close();
+  });
+
   it("dispatches extended mapped modules without catalog validation failures", async () => {
     const app = buildApp();
 

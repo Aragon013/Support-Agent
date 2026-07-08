@@ -1,3 +1,6 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
 export type SecAuditPlanStatus = "draft" | "running" | "partial" | "completed" | "failed";
 
 export type SecAuditExecutionLevel = "safe" | "safe_light" | "deep";
@@ -74,6 +77,44 @@ function calculateScore(results: SecAuditModuleResult[]): number {
 export class InMemorySecAuditPlanStore {
   private plans = new Map<string, SecAuditPlanRecord>();
   private seq = 0;
+  private readonly persistenceFilePath?: string;
+
+  constructor(persistenceFilePath?: string) {
+    this.persistenceFilePath = persistenceFilePath;
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk(): void {
+    if (!this.persistenceFilePath) return;
+    try {
+      const raw = readFileSync(this.persistenceFilePath, "utf-8");
+      const parsed = JSON.parse(raw) as { plans?: SecAuditPlanRecord[] };
+      const plans = Array.isArray(parsed.plans) ? parsed.plans : [];
+      for (const plan of plans) {
+        this.plans.set(plan.id, plan);
+      }
+      this.seq = plans.reduce((max, item) => {
+        const n = Number(item.id.replace("secaudit_plan_", ""));
+        return Number.isFinite(n) ? Math.max(max, n) : max;
+      }, 0);
+    } catch {
+      // Best-effort loading: ignore if file does not exist or is invalid.
+    }
+  }
+
+  private saveToDisk(): void {
+    if (!this.persistenceFilePath) return;
+    const payload = {
+      plans: Array.from(this.plans.values()),
+      savedAt: new Date().toISOString(),
+    };
+    try {
+      mkdirSync(dirname(this.persistenceFilePath), { recursive: true });
+      writeFileSync(this.persistenceFilePath, JSON.stringify(payload, null, 2), "utf-8");
+    } catch {
+      // Persistence is best-effort and should not break request flow.
+    }
+  }
 
   create(input: CreateSecAuditPlanInput): SecAuditPlanRecord {
     this.seq += 1;
@@ -101,6 +142,7 @@ export class InMemorySecAuditPlanStore {
     };
 
     this.plans.set(plan.id, plan);
+    this.saveToDisk();
     return plan;
   }
 
@@ -116,6 +158,7 @@ export class InMemorySecAuditPlanStore {
     found.severityBuckets = calculateSeverityBuckets(found.results);
     found.score = calculateScore(found.results);
     this.plans.set(id, found);
+    this.saveToDisk();
     return found;
   }
 
