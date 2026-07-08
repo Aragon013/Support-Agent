@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BellRing, Send, Plus, CheckCircle2, XCircle, Clock3 } from "lucide-react";
+import { BellRing, Send, Plus, CheckCircle2, XCircle } from "lucide-react";
 import { apiUrl } from "@/lib/backend-url";
 import { cn } from "@/lib/cn";
 
@@ -10,6 +10,10 @@ type AlertChannel = {
   name: string;
   type: AlertChannelType;
   target: string;
+  auth?: {
+    headerName: string;
+    tokenMasked: string;
+  };
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -43,6 +47,8 @@ export function AlertsPanel() {
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState<AlertChannelType>("webhook");
   const [newTarget, setNewTarget] = useState("");
+  const [newAuthHeaderName, setNewAuthHeaderName] = useState("Authorization");
+  const [newAuthToken, setNewAuthToken] = useState("");
   const [creating, setCreating] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
 
@@ -74,17 +80,33 @@ export function AlertsPanel() {
       setError("Name and target are required.");
       return;
     }
+    if ((newAuthHeaderName.trim() && !newAuthToken.trim()) || (!newAuthHeaderName.trim() && newAuthToken.trim())) {
+      setError("Auth header and token must be provided together.");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
+      const payload: Record<string, unknown> = {
+        name: newName.trim(),
+        type: newType,
+        target: newTarget.trim(),
+        enabled: true,
+      };
+      if (newAuthHeaderName.trim() && newAuthToken.trim()) {
+        payload.authHeaderName = newAuthHeaderName.trim();
+        payload.authToken = newAuthToken.trim();
+      }
+
       const res = await fetch(apiUrl("/api/v1/alerts/channels"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: newName.trim(), type: newType, target: newTarget.trim(), enabled: true }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`create_http_${res.status}`);
       setNewName("");
       setNewTarget("");
+      setNewAuthToken("");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create channel");
@@ -148,7 +170,7 @@ export function AlertsPanel() {
       <section className="tv-panel p-4 space-y-3">
         <h3 className="text-sm font-semibold text-slate-900">Alert Channels</h3>
 
-        <div className="grid gap-2 md:grid-cols-[1.2fr_0.8fr_1.8fr_auto]">
+        <div className="grid gap-2 md:grid-cols-[1.2fr_0.8fr_1.8fr_1fr_1fr_auto]">
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -166,6 +188,18 @@ export function AlertsPanel() {
             value={newTarget}
             onChange={(e) => setNewTarget(e.target.value)}
             placeholder={newType === "email" ? "secops@example.com" : "https://..."}
+            className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm outline-none focus:border-brand"
+          />
+          <input
+            value={newAuthHeaderName}
+            onChange={(e) => setNewAuthHeaderName(e.target.value)}
+            placeholder="Auth header (optional)"
+            className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm outline-none focus:border-brand"
+          />
+          <input
+            value={newAuthToken}
+            onChange={(e) => setNewAuthToken(e.target.value)}
+            placeholder="Auth token (optional)"
             className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm outline-none focus:border-brand"
           />
           <button
@@ -188,6 +222,7 @@ export function AlertsPanel() {
               <div>
                 <p className="text-sm font-semibold text-slate-900">{ch.name}</p>
                 <p className="text-[11px] text-slate-500">{ch.type} · {ch.target}</p>
+                {ch.auth ? <p className="text-[11px] text-slate-400">{ch.auth.headerName}: {ch.auth.tokenMasked}</p> : null}
               </div>
               <button
                 onClick={() => toggleChannel(ch)}

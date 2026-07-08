@@ -111,4 +111,28 @@ describe("AlertDispatcher", () => {
     expect(event.deliveries[0]?.status).toBe("sent");
     expect(event.deliveries[0]?.detail).toBe("email_simulated");
   });
+
+  it("sends configured auth header for webhook-compatible channels", async () => {
+    await withCaptureServer(async (url, captures) => {
+      const store = new InMemoryAlertStore();
+      store.createChannel({
+        name: "Webhook",
+        type: "webhook",
+        target: url,
+        enabled: true,
+        auth: { headerName: "X-Api-Key", token: "token-123" },
+      });
+      const dispatcher = new AlertDispatcher(store);
+
+      await dispatcher.dispatch({
+        category: "system",
+        severity: "info",
+        title: "Header test",
+        message: "Uses custom auth header",
+      });
+
+      expect(captures).toHaveLength(1);
+      expect(captures[0]?.headers["x-api-key"]).toBe("token-123");
+    });
+  });
 });

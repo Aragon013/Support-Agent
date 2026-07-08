@@ -98,9 +98,13 @@ export class AlertDispatcher {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (channel.auth?.headerName && channel.auth.token) {
+        headers[channel.auth.headerName] = channel.auth.token;
+      }
       const res = await fetch(channel.target, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal,
       });

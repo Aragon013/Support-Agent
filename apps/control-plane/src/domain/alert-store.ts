@@ -7,6 +7,10 @@ export type AlertChannel = {
   name: string;
   type: AlertChannelType;
   target: string;
+  auth?: {
+    headerName: string;
+    token: string;
+  };
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -34,6 +38,10 @@ type CreateChannelInput = {
   name: string;
   type: AlertChannelType;
   target: string;
+  auth?: {
+    headerName: string;
+    token: string;
+  };
   enabled?: boolean;
 };
 
@@ -48,6 +56,7 @@ export class InMemoryAlertStore {
       name: input.name,
       type: input.type,
       target: input.target,
+      ...(input.auth !== undefined ? { auth: input.auth } : {}),
       enabled: input.enabled ?? true,
       createdAt: now,
       updatedAt: now,
@@ -64,16 +73,35 @@ export class InMemoryAlertStore {
     return this.channels.get(id);
   }
 
-  updateChannel(id: string, patch: { name?: string; target?: string; enabled?: boolean }): AlertChannel | undefined {
+  updateChannel(
+    id: string,
+    patch: {
+      name?: string;
+      target?: string;
+      enabled?: boolean;
+      auth?: {
+        headerName: string;
+        token: string;
+      } | null;
+    },
+  ): AlertChannel | undefined {
     const found = this.channels.get(id);
     if (!found) return undefined;
-    const next: AlertChannel = {
+    const base: AlertChannel = {
       ...found,
       ...(patch.name !== undefined ? { name: patch.name } : {}),
       ...(patch.target !== undefined ? { target: patch.target } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       updatedAt: new Date().toISOString(),
     };
+    const next: AlertChannel = patch.auth === null
+      ? (() => {
+        const { auth: _auth, ...rest } = base;
+        return rest;
+      })()
+      : patch.auth !== undefined
+        ? { ...base, auth: patch.auth }
+        : base;
     this.channels.set(id, next);
     return next;
   }
