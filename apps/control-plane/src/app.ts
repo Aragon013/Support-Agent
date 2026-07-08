@@ -71,7 +71,12 @@ export function buildApp(): FastifyInstance {
     });
     registerComplianceRoutesWithDeps(app, { planStore });
     registerExceptionRoutesWithDeps(app, { store: exceptionStore });
-    registerAlertRoutesWithDeps(app, { store: alertStore, dispatcher: alertDispatcher, auditStore });
+    registerAlertRoutesWithDeps(app, {
+      store: alertStore,
+      dispatcher: alertDispatcher,
+      auditStore,
+      requireAdminKey,
+    });
   });
 
   app.get("/health", async () => {

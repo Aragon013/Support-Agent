@@ -52,13 +52,27 @@ export function AlertsPanel() {
   const [creating, setCreating] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
 
+  const readAdminApiKey = () => {
+    const envKey = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_ADMIN_API_KEY;
+    if (envKey && envKey.trim().length > 0) return envKey.trim();
+    const localKey = window.localStorage.getItem("adminApiKey");
+    return localKey && localKey.trim().length > 0 ? localKey.trim() : "";
+  };
+
+  const authHeaders = (includeJson = false): Record<string, string> => {
+    const headers: Record<string, string> = includeJson ? { "content-type": "application/json" } : {};
+    const apiKey = readAdminApiKey();
+    if (apiKey) headers["x-api-key"] = apiKey;
+    return headers;
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
       const [chRes, evRes] = await Promise.all([
-        fetch(apiUrl("/api/v1/alerts/channels")),
-        fetch(apiUrl("/api/v1/alerts/events")),
+        fetch(apiUrl("/api/v1/alerts/channels"), { headers: authHeaders() }),
+        fetch(apiUrl("/api/v1/alerts/events"), { headers: authHeaders() }),
       ]);
       if (!chRes.ok) throw new Error(`channels_http_${chRes.status}`);
       if (!evRes.ok) throw new Error(`events_http_${evRes.status}`);
@@ -100,7 +114,7 @@ export function AlertsPanel() {
 
       const res = await fetch(apiUrl("/api/v1/alerts/channels"), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders(true),
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`create_http_${res.status}`);
@@ -119,7 +133,7 @@ export function AlertsPanel() {
     try {
       const res = await fetch(apiUrl(`/api/v1/alerts/channels/${channel.id}`), {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders(true),
         body: JSON.stringify({ enabled: !channel.enabled }),
       });
       if (!res.ok) throw new Error(`patch_http_${res.status}`);
@@ -133,7 +147,7 @@ export function AlertsPanel() {
     setSendingTest(true);
     setError(null);
     try {
-      const res = await fetch(apiUrl("/api/v1/alerts/test"), { method: "POST" });
+      const res = await fetch(apiUrl("/api/v1/alerts/test"), { method: "POST", headers: authHeaders() });
       if (!res.ok) throw new Error(`test_http_${res.status}`);
       await load();
     } catch (e) {
@@ -152,7 +166,7 @@ export function AlertsPanel() {
     try {
       const res = await fetch(apiUrl(`/api/v1/alerts/channels/${channel.id}/rotate-token`), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders(true),
         body: JSON.stringify({
           authToken: nextToken.trim(),
           ...(nextHeader !== undefined ? { authHeaderName: nextHeader } : {}),

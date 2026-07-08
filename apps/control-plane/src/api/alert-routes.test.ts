@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 
+const adminHeaders = { "x-api-key": "dev-insecure-key-change-in-prod" };
+
 describe("alert routes", () => {
   it("creates and lists alert channels", async () => {
     const app = buildApp();
@@ -8,6 +10,7 @@ describe("alert routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/alerts/channels",
+      headers: adminHeaders,
       payload: {
         name: "Ops Slack",
         type: "webhook",
@@ -26,7 +29,7 @@ describe("alert routes", () => {
     expect(ch.auth?.tokenMasked).toBeDefined();
     expect(ch.auth?.tokenMasked).not.toContain("supersecrettoken");
 
-    const list = await app.inject({ method: "GET", url: "/api/v1/alerts/channels" });
+    const list = await app.inject({ method: "GET", url: "/api/v1/alerts/channels", headers: adminHeaders });
     expect(list.statusCode).toBe(200);
     const body = list.json() as { count: number; items: Array<{ id: string; auth?: { tokenMasked?: string } }> };
     expect(body.count).toBeGreaterThan(0);
@@ -44,6 +47,7 @@ describe("alert routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/alerts/channels",
+      headers: adminHeaders,
       payload: {
         name: "Email",
         type: "email",
@@ -55,6 +59,7 @@ describe("alert routes", () => {
     const patch = await app.inject({
       method: "PATCH",
       url: `/api/v1/alerts/channels/${id}`,
+      headers: adminHeaders,
       payload: { enabled: false },
     });
 
@@ -71,6 +76,7 @@ describe("alert routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/alerts/channels",
+      headers: adminHeaders,
       payload: {
         name: "Webhook",
         type: "webhook",
@@ -82,6 +88,7 @@ describe("alert routes", () => {
     const setAuth = await app.inject({
       method: "PATCH",
       url: `/api/v1/alerts/channels/${id}`,
+      headers: adminHeaders,
       payload: { authHeaderName: "X-Api-Key", authToken: "abc123secret" },
     });
     expect(setAuth.statusCode).toBe(200);
@@ -92,6 +99,7 @@ describe("alert routes", () => {
     const clearAuth = await app.inject({
       method: "PATCH",
       url: `/api/v1/alerts/channels/${id}`,
+      headers: adminHeaders,
       payload: { clearAuth: true },
     });
     expect(clearAuth.statusCode).toBe(200);
@@ -108,6 +116,7 @@ describe("alert routes", () => {
     await app.inject({
       method: "POST",
       url: "/api/v1/alerts/channels",
+      headers: adminHeaders,
       payload: {
         name: "Email",
         type: "email",
@@ -115,13 +124,13 @@ describe("alert routes", () => {
       },
     });
 
-    const testSend = await app.inject({ method: "POST", url: "/api/v1/alerts/test" });
+    const testSend = await app.inject({ method: "POST", url: "/api/v1/alerts/test", headers: adminHeaders });
     expect(testSend.statusCode).toBe(200);
     const event = testSend.json() as { category: string; deliveries: Array<{ status: string }> };
     expect(event.category).toBe("test");
     expect(event.deliveries.length).toBeGreaterThan(0);
 
-    const events = await app.inject({ method: "GET", url: "/api/v1/alerts/events" });
+    const events = await app.inject({ method: "GET", url: "/api/v1/alerts/events", headers: adminHeaders });
     expect(events.statusCode).toBe(200);
     const body = events.json() as { count: number };
     expect(body.count).toBeGreaterThan(0);
@@ -139,7 +148,7 @@ describe("alert routes", () => {
     const create = await app.inject({
       method: "POST",
       url: "/api/v1/alerts/channels",
-      headers,
+      headers: { ...adminHeaders, "x-tenant-id": "tenant-alerts", "x-operator-id": "operator-alerts" },
       payload: {
         name: "Ops Webhook",
         type: "webhook",
@@ -152,7 +161,7 @@ describe("alert routes", () => {
     const rotate = await app.inject({
       method: "POST",
       url: `/api/v1/alerts/channels/${created.id}/rotate-token`,
-      headers,
+      headers: { ...adminHeaders, "x-tenant-id": "tenant-alerts", "x-operator-id": "operator-alerts" },
       payload: {
         authToken: "rotated-super-secret-token",
         authHeaderName: "X-Webhook-Token",
@@ -172,6 +181,41 @@ describe("alert routes", () => {
     const auditBody = audit.json() as { items: Array<{ code: string }> };
     expect(auditBody.items.some((x) => x.code === "alerts.channel.created")).toBe(true);
     expect(auditBody.items.some((x) => x.code === "alerts.channel.token_rotated")).toBe(true);
+
+    await app.close();
+  });
+
+  it("enforces rotate-token cooldown", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/alerts/channels",
+      headers: adminHeaders,
+      payload: {
+        name: "Cooldown Webhook",
+        type: "webhook",
+        target: "https://example.com/cooldown",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as { id: string };
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/alerts/channels/${created.id}/rotate-token`,
+      headers: adminHeaders,
+      payload: { authToken: "token-1" },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/v1/alerts/channels/${created.id}/rotate-token`,
+      headers: adminHeaders,
+      payload: { authToken: "token-2" },
+    });
+    expect(second.statusCode).toBe(429);
 
     await app.close();
   });

@@ -28,6 +28,12 @@ type RotateTokenBody = {
   authHeaderName?: string;
 };
 
+type PreHandlerFn = (req: FastifyRequest, reply: FastifyReply, done: () => void) => void;
+
+const ROTATE_COOLDOWN_MS = 60_000;
+const ROTATE_WINDOW_MS = 10 * 60_000;
+const ROTATE_MAX_PER_WINDOW = 3;
+
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
@@ -71,11 +77,18 @@ export function registerAlertRoutes(app: FastifyInstance): void {
 
 export function registerAlertRoutesWithDeps(
   app: FastifyInstance,
-  deps: { store?: InMemoryAlertStore; dispatcher?: AlertDispatcher; auditStore?: InMemoryAuditLogStore },
+  deps: {
+    store?: InMemoryAlertStore;
+    dispatcher?: AlertDispatcher;
+    auditStore?: InMemoryAuditLogStore;
+    requireAdminKey?: PreHandlerFn;
+  },
 ): void {
   const store = deps.store ?? new InMemoryAlertStore();
   const dispatcher = deps.dispatcher ?? new AlertDispatcher(store);
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
+  const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
+  const rotateHistoryByChannel = new Map<string, number[]>();
 
   const actorFromReq = (req: FastifyRequest) => {
     const tenantRaw = req.headers["x-tenant-id"];
@@ -95,7 +108,7 @@ export function registerAlertRoutesWithDeps(
     });
   };
 
-  app.post<{ Body: CreateChannelBody }>("/api/v1/alerts/channels", async (req, reply) => {
+  app.post<{ Body: CreateChannelBody }>("/api/v1/alerts/channels", { preHandler: requireAdminKey }, async (req, reply) => {
     const b = req.body;
     if (!b || !isNonEmptyString(b.name) || !isChannelType(b.type) || !isNonEmptyString(b.target)) {
       return reply.code(422).send({ code: "validation_error", message: "name, type and target are required" });
@@ -133,12 +146,12 @@ export function registerAlertRoutesWithDeps(
     return reply.code(201).send(sanitizeChannel(created));
   });
 
-  app.get("/api/v1/alerts/channels", async (_req, reply) => {
+  app.get("/api/v1/alerts/channels", { preHandler: requireAdminKey }, async (_req, reply) => {
     const items = store.listChannels().map(sanitizeChannel);
     return reply.code(200).send({ items, count: items.length });
   });
 
-  app.patch<{ Params: IdParams; Body: UpdateChannelBody }>("/api/v1/alerts/channels/:id", async (req, reply) => {
+  app.patch<{ Params: IdParams; Body: UpdateChannelBody }>("/api/v1/alerts/channels/:id", { preHandler: requireAdminKey }, async (req, reply) => {
     const found = store.getChannelById(req.params.id);
     if (!found) {
       return reply.code(404).send({ code: "not_found", message: "alert channel not found" });
@@ -186,7 +199,7 @@ export function registerAlertRoutesWithDeps(
     return reply.code(200).send(updated ? sanitizeChannel(updated) : updated);
   });
 
-  app.post<{ Params: IdParams; Body: RotateTokenBody }>("/api/v1/alerts/channels/:id/rotate-token", async (req, reply) => {
+  app.post<{ Params: IdParams; Body: RotateTokenBody }>("/api/v1/alerts/channels/:id/rotate-token", { preHandler: requireAdminKey }, async (req, reply) => {
     const found = store.getChannelById(req.params.id);
     if (!found) {
       return reply.code(404).send({ code: "not_found", message: "alert channel not found" });
@@ -205,6 +218,30 @@ export function registerAlertRoutesWithDeps(
     }
 
     const nextHeader = b.authHeaderName ?? found.auth?.headerName ?? "Authorization";
+    const now = Date.now();
+    const history = rotateHistoryByChannel.get(req.params.id) ?? [];
+    const inWindow = history.filter((ts) => now - ts <= ROTATE_WINDOW_MS);
+    const latestTs: number | null = inWindow.length > 0 ? (inWindow[inWindow.length - 1] ?? null) : null;
+
+    if (latestTs !== null && (now - latestTs) < ROTATE_COOLDOWN_MS) {
+      const retryAfterSec = Math.ceil((ROTATE_COOLDOWN_MS - (now - latestTs)) / 1000);
+      return reply.code(429).send({
+        code: "rate_limited",
+        message: "token rotation cooldown active",
+        retryAfterSec,
+      });
+    }
+
+    if (inWindow.length >= ROTATE_MAX_PER_WINDOW) {
+      const earliest = inWindow[0] ?? now;
+      const retryAfterSec = Math.ceil((ROTATE_WINDOW_MS - (now - earliest)) / 1000);
+      return reply.code(429).send({
+        code: "rate_limited",
+        message: "too many token rotations for this channel",
+        retryAfterSec,
+      });
+    }
+
     const updated = store.updateChannel(req.params.id, {
       auth: {
         headerName: nextHeader,
@@ -222,11 +259,12 @@ export function registerAlertRoutesWithDeps(
       type: updated.type,
       authHeaderName: nextHeader,
     });
+    rotateHistoryByChannel.set(req.params.id, [...inWindow, now]);
 
     return reply.code(200).send(sanitizeChannel(updated));
   });
 
-  app.post("/api/v1/alerts/test", async (_req: FastifyRequest, reply: FastifyReply) => {
+  app.post("/api/v1/alerts/test", { preHandler: requireAdminKey }, async (_req: FastifyRequest, reply: FastifyReply) => {
     const event = await dispatcher.dispatch({
       category: "test",
       severity: "info",
@@ -242,7 +280,7 @@ export function registerAlertRoutesWithDeps(
     return reply.code(200).send(event);
   });
 
-  app.get("/api/v1/alerts/events", async (_req, reply) => {
+  app.get("/api/v1/alerts/events", { preHandler: requireAdminKey }, async (_req, reply) => {
     const items = store.listEvents();
     return reply.code(200).send({ items, count: items.length });
   });
