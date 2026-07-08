@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import type { SecAuditPlanRecord, AuditComparison } from "../domain/secaudit-plan-store.js";
+import { buildSecAuditRemediations } from "./secaudit-report.js";
 
 type PDFOptions = {
   plan: SecAuditPlanRecord;
@@ -8,6 +9,7 @@ type PDFOptions = {
 
 export function generateSecAuditPDF(options: PDFOptions): Buffer {
   const { plan, comparison } = options;
+  const remediations = buildSecAuditRemediations(plan);
   const doc = new PDFDocument({ size: "A4", margin: 40 });
   const chunks: Buffer[] = [];
 
@@ -101,22 +103,23 @@ export function generateSecAuditPDF(options: PDFOptions): Buffer {
   doc.fontSize(12).font("Helvetica-Bold").text("RECOMMENDED REMEDIATIONS");
   doc.moveDown(0.5);
 
-  const criticalFindings = plan.results.filter((x) => (x.findings as Record<string, unknown>)?.severity === "critical" && x.status === "completed");
-  if (criticalFindings.length > 0) {
-    doc.fontSize(10).font("Helvetica-Bold").text("Critical Priority:", { underline: true });
-    criticalFindings.slice(0, 5).forEach((finding) => {
-      const module = finding.moduleId.replace(/^[^.]+\./, "");
-      doc.fontSize(9).font("Helvetica").text(`☐ Address ${module} finding`, { indent: 20 });
-    });
-    doc.moveDown(0.5);
-  }
-
-  const highFindings = plan.results.filter((x) => (x.findings as Record<string, unknown>)?.severity === "high" && x.status === "completed");
-  if (highFindings.length > 0) {
-    doc.fontSize(10).font("Helvetica-Bold").text("High Priority:", { underline: true });
-    highFindings.slice(0, 5).forEach((finding) => {
-      const module = finding.moduleId.replace(/^[^.]+\./, "");
-      doc.fontSize(9).font("Helvetica").text(`☐ Review ${module} configuration`, { indent: 20 });
+  if (remediations.length === 0) {
+    doc.fontSize(9).font("Helvetica").text("No remediation items were generated for the completed modules.");
+  } else {
+    remediations.slice(0, 6).forEach((item) => {
+      const color = item.priority === "critical"
+        ? "#e74c3c"
+        : item.priority === "high"
+          ? "#e67e22"
+          : item.priority === "medium"
+            ? "#f39c12"
+            : "#3498db";
+      doc.fillColor(color).fontSize(10).font("Helvetica-Bold").text(`[${item.priority.toUpperCase()}] ${item.title}`);
+      doc.fillColor("#000").fontSize(9).font("Helvetica");
+      item.actions.slice(0, 3).forEach((action) => {
+        doc.text(`- ${action}`, { indent: 18 });
+      });
+      doc.moveDown(0.4);
     });
   }
 

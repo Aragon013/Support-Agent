@@ -59,6 +59,19 @@ type AuditComparison = {
   percentageImprovement: number | null;
 };
 
+type AuditRemediation = {
+  moduleId: string;
+  title: string;
+  priority: Exclude<Severity, "info">;
+  actions: string[];
+};
+
+type AuditReport = {
+  id: string;
+  executive: { score: number | null; summary: string };
+  remediations: AuditRemediation[];
+};
+
 type AuditOrigin = "host" | "host_network" | "client_network";
 type OSType = "windows" | "linux" | "macos" | "all";
 type AuditLevel = "safe" | "safe_light" | "deep";
@@ -477,6 +490,7 @@ export function SecAuditPanel() {
   const [score, setScore] = useState<number | null>(null);
   const [severityBuckets, setSeverityBuckets] = useState<PlanResultsResponse["severityBuckets"] | null>(null);
   const [comparison, setComparison] = useState<AuditComparison | null>(null);
+  const [report, setReport] = useState<AuditReport | null>(null);
 
   const packageMeta = useMemo(
     () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
@@ -630,6 +644,17 @@ export function SecAuditPanel() {
     }
   };
 
+  const loadReport = async (planId: string) => {
+    try {
+      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${planId}/report`));
+      if (!response.ok) return;
+      const data = (await response.json()) as AuditReport;
+      setReport(data);
+    } catch {
+      setReport(null);
+    }
+  };
+
   const runAudit = async () => {
     if (selectedModules.length === 0) {
       setRunError("Select at least one module before running the audit.");
@@ -640,6 +665,8 @@ export function SecAuditPanel() {
     setRunState("creating");
 
     try {
+      setComparison(null);
+      setReport(null);
       const createResponse = await fetch(apiUrl("/api/v1/secaudit/plans"), {
         method: "POST",
         headers: {
@@ -689,14 +716,12 @@ export function SecAuditPanel() {
       }
 
       await refreshResults(plan.id);
+      await loadComparison(plan.id);
+      await loadReport(plan.id);
       setRunState("done");
     } catch (error) {
       setRunState("error");
       setRunError(error instanceof Error ? error.message : "Audit execution failed");
-    }
-
-    if (activePlanId) {
-      await loadComparison(activePlanId);
     }
   };
 
@@ -990,6 +1015,37 @@ export function SecAuditPanel() {
                 Export Report (PDF)
               </button>
             )}
+
+            {report?.remediations?.length ? (
+              <div className="mb-3 rounded-lg border border-danger/20 bg-danger/5 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-900">Recommended Remediations</p>
+                  <span className="rounded-full border border-danger/20 bg-white px-2 py-0.5 text-[10px] text-slate-600">
+                    {report.remediations.length} items
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {report.remediations.slice(0, 4).map((item) => (
+                    <div key={item.moduleId} className="rounded-lg border border-white/70 bg-white px-3 py-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold text-slate-900">{item.title}</p>
+                          <p className="text-[11px] text-slate-500">{item.moduleId}</p>
+                        </div>
+                        <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", SEVERITY_STYLE[item.priority])}>
+                          {item.priority}
+                        </span>
+                      </div>
+                      <ul className="mt-2 space-y-1 text-[11px] text-slate-700">
+                        {item.actions.slice(0, 3).map((action) => (
+                          <li key={action}>- {action}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="max-h-56 space-y-2 overflow-auto">
               {results.length === 0 ? (

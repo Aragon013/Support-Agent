@@ -169,6 +169,7 @@ describe("secaudit routes", () => {
     const body = report.json() as {
       id: string;
       executive: { score: number | null; severities: Record<string, number>; summary: string };
+      remediations: Array<{ moduleId: string; title: string; priority: string; actions: string[] }>;
       modules: Array<{ id: string; status: string }>;
     };
 
@@ -177,6 +178,9 @@ describe("secaudit routes", () => {
     expect(body.executive.score).toBe(100); // No severity findings = perfect score
     expect(body.executive.severities).toBeDefined();
     expect(body.executive.summary).toContain("Audit completed");
+    expect(body.remediations).toHaveLength(1);
+    expect(body.remediations[0]?.moduleId).toBe("net.client-health");
+    expect(body.remediations[0]?.actions.length).toBeGreaterThan(0);
     expect(body.modules.length).toBe(1);
     expect(body.modules[0]?.id).toBe("net.client-health");
 
