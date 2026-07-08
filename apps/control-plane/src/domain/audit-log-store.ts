@@ -33,6 +33,7 @@ export type CreateAuditLogInput = Omit<AuditLogRecord, "id" | "createdAt">;
 export type AuditPurgePolicy = {
   retentionDays: number;
   preserveCodes?: AuditEventCode[];
+  tenantId?: string;        // Si se especifica, purga solo ese tenant
   nowMs?: number;
 };
 
@@ -150,6 +151,11 @@ export class InMemoryAuditLogStore {
         continue;
       }
 
+      // Si se especifica tenantId, solo purga ese tenant
+      if (policy.tenantId && row.tenantId !== policy.tenantId) {
+        continue;
+      }
+
       const rowMs = new Date(row.createdAt).getTime();
       const isExpired = Number.isFinite(rowMs) && rowMs <= cutoffMs;
       if (!isExpired) {
@@ -171,5 +177,13 @@ export class InMemoryAuditLogStore {
       preserved,
       byTenant,
     };
+  }
+
+  /**
+   * Retorna la política de retención efectiva para un tenant.
+   * En el futuro, esto podría leerse de una BD por-tenant.
+   */
+  getRetentionDaysForTenant(_tenantId: string): number {
+    return this.retentionDays;
   }
 }

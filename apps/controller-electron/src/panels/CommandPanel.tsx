@@ -3,6 +3,18 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Send, ChevronDown, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
+import { z } from "zod";
+
+const DispatchResultSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  requiresMfa: z.boolean().optional(),
+  riskLevel: z.string().optional(),
+  mfaRequired: z.boolean().optional(),
+  reason: z.string().optional(),
+});
+
+type DispatchResult = z.infer<typeof DispatchResultSchema>;
 
 const CATALOG = [
   { id: "diagnostic.system.info",   label: "System Info",       risk: "low",      params: [] },
@@ -18,12 +30,6 @@ const RISK_BADGE: Record<RiskLevel, string> = {
   medium: "bg-warn/15 text-warn border-warn/30",
   high:   "bg-danger/15 text-danger border-danger/30",
 };
-
-interface DispatchResult {
-  id: string;
-  status: string;
-  requiresMfa?: boolean;
-}
 
 export function CommandPanel() {
   const [selected, setSelected] = useState(CATALOG[0].id);
@@ -51,10 +57,14 @@ export function CommandPanel() {
           requestedParams: params,
         }),
       });
-      const body = await res.json() as DispatchResult;
-      setResult(body);
+      const parsed = DispatchResultSchema.safeParse(await res.json());
+      if (!parsed.success) {
+        setError("Unexpected response from server.");
+        return;
+      }
+      setResult(parsed.data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
+      setError(e instanceof Error ? e.message : "Could not reach server.");
     } finally {
       setLoading(false);
     }

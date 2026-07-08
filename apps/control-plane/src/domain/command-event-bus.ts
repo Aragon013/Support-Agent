@@ -56,6 +56,7 @@ export type CommandDataEnvelope =
 export type EventPurgePolicy = {
   retentionDays: number;
   preserveEnvelopeKinds?: Array<CommandDataEnvelope["kind"]>;
+  tenantId?: string;     // Si se especifica, purga solo ese tenant
   nowMs?: number;
 };
 
@@ -313,6 +314,10 @@ export class InMemoryCommandEventBus {
 
     for (const [jobId, events] of this.jobEvents.entries()) {
       const tenantId = this.jobTenant.get(jobId) ?? "unknown";
+      // Skip if scoped to a different tenant
+      if (policy.tenantId && tenantId !== policy.tenantId) {
+        continue;
+      }
       const kept = events.filter((event) => {
         const eventMs = new Date(event.createdAt).getTime();
         const expired = Number.isFinite(eventMs) && eventMs <= cutoffMs;
@@ -334,6 +339,10 @@ export class InMemoryCommandEventBus {
 
     for (const [jobId, envelopes] of this.dataEnvelopes.entries()) {
       const tenantId = this.jobTenant.get(jobId) ?? "unknown";
+      // Skip if scoped to a different tenant
+      if (policy.tenantId && tenantId !== policy.tenantId) {
+        continue;
+      }
       const kept = envelopes.filter((envelope) => {
         const createdMs =
           envelope.kind === "command.init"

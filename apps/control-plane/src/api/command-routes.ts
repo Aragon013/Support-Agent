@@ -58,6 +58,7 @@ type AuditQuery = {
 
 type PurgeBody = {
   retentionDays?: number;
+  tenantId?: string;        // Purga solo ese tenant si se especifica
 };
 
 type RunJobBody = {
@@ -180,14 +181,16 @@ export function registerCommandRoutesWithDeps(
 
   registerCommandEventsWsRoute(app, wsHub);
 
-  const runRetentionPurge = (retentionDays = RETENTION_DAYS_DEFAULT) => {
+  const runRetentionPurge = (retentionDays = RETENTION_DAYS_DEFAULT, tenantId?: string) => {
     const auditReport = auditStore.purgeWithPolicy({
       retentionDays,
       preserveCodes: [...PRESERVE_AUDIT_CODES],
+      ...(tenantId ? { tenantId } : {}),
     });
     const eventReport = eventBus.purgeWithPolicy({
       retentionDays,
       preserveEnvelopeKinds: [...PRESERVE_ENVELOPE_KINDS],
+      ...(tenantId ? { tenantId } : {}),
     });
 
     const mergedByTenant: Record<string, number> = { ...auditReport.byTenant };
@@ -402,10 +405,11 @@ export function registerCommandRoutesWithDeps(
         });
       }
 
-      const report = runRetentionPurge(retentionDays);
+      const report = runRetentionPurge(retentionDays, isNonEmptyString(body?.tenantId) ? body.tenantId : undefined);
       return {
         policy: {
           retentionDays,
+          tenantId: isNonEmptyString(body?.tenantId) ? body.tenantId : "all",
           preserveAuditCodes: [...PRESERVE_AUDIT_CODES],
           preserveEnvelopeKinds: [...PRESERVE_ENVELOPE_KINDS],
         },

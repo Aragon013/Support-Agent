@@ -3,15 +3,25 @@ import { motion } from "framer-motion";
 import { ShieldCheck, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
+import { z } from "zod";
 
-interface AuditRecord {
-  id: string;
-  createdAt: string;
-  tenantId: string;
-  operatorId: string;
-  code: string;
-  details: Record<string, unknown>;
-}
+const AuditRecordSchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  tenantId: z.string(),
+  operatorId: z.string(),
+  code: z.string(),
+  details: z.record(z.unknown()),
+  endpointId: z.string().optional(),
+  jobId: z.string().optional(),
+});
+
+const AuditResponseSchema = z.object({
+  items: z.array(AuditRecordSchema),
+  retentionDays: z.number().optional(),
+});
+
+type AuditRecord = z.infer<typeof AuditRecordSchema>;
 
 const CODE_ICON: Record<string, React.ElementType> = {
   "command.job.blocked": AlertTriangle,
@@ -29,20 +39,28 @@ export function AuditPanel() {
   const [tenantId, setTenantId] = useState("");
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     if (!tenantId.trim()) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(
         apiUrl(`/api/v1/audit?tenantId=${encodeURIComponent(tenantId)}`),
       );
-      if (res.ok) {
-        const body = await res.json() as { items: AuditRecord[] };
-        setRecords(body.items ?? []);
+      if (!res.ok) {
+        setError(`Failed to load records (HTTP ${res.status}).`);
+        return;
       }
+      const parsed = AuditResponseSchema.safeParse(await res.json());
+      if (!parsed.success) {
+        setError("Unexpected response format from server.");
+        return;
+      }
+      setRecords(parsed.data.items);
     } catch {
-      // offline
+      setError("Could not reach the server. Check your connection.");
     } finally {
       setLoading(false);
     }
@@ -68,7 +86,13 @@ export function AuditPanel() {
         </button>
       </div>
 
-      {records.length === 0 ? (
+      {error && (
+        <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+          {error}
+        </div>
+      )}
+
+      {!error && records.length === 0 ? (
         <div className="tv-empty flex flex-col items-center justify-center py-16">
           <ShieldCheck className="w-10 h-10 mb-3" />
           <p className="text-sm">Enter a tenant ID and click Load Records.</p>

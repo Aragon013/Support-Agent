@@ -8,7 +8,8 @@
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "seed:endpoints": "node scripts/seed-endpoints.mjs"
   },
   "dependencies": {
     "@fastify/rate-limit": "^11.1.0",
