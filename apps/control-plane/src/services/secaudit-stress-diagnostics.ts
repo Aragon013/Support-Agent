@@ -82,6 +82,47 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export type RecoveryPreset = "conservative" | "balanced" | "aggressive";
+
+export function getRecoveryPreset(preset: RecoveryPreset): Partial<StressRecoveryPolicy> {
+  switch (preset) {
+    case "conservative":
+      return {
+        autoResumeEnabled: true,
+        stopThresholds: { packetLossPct: 25, latencyMs: 600, responseTimeMs: 1200 },
+        resumeDelayMs: 500,
+        resumeBackoffMs: 500,
+        maxResumeAttempts: 1,
+        resumeProbeSamples: 3,
+        resumeHealthySamplesRequired: 3,
+        resumeThresholds: { packetLossPct: 10, latencyMs: 300, responseTimeMs: 600 },
+      };
+    case "aggressive":
+      return {
+        autoResumeEnabled: true,
+        stopThresholds: { packetLossPct: 8, latencyMs: 120, responseTimeMs: 240 },
+        resumeDelayMs: 100,
+        resumeBackoffMs: 200,
+        maxResumeAttempts: 4,
+        resumeProbeSamples: 2,
+        resumeHealthySamplesRequired: 2,
+        resumeThresholds: { packetLossPct: 2, latencyMs: 60, responseTimeMs: 120 },
+      };
+    case "balanced":
+    default:
+      return {
+        autoResumeEnabled: true,
+        stopThresholds: { packetLossPct: 18, latencyMs: 320, responseTimeMs: 520 },
+        resumeDelayMs: 2000,
+        resumeBackoffMs: 1000,
+        maxResumeAttempts: 2,
+        resumeProbeSamples: 2,
+        resumeHealthySamplesRequired: 2,
+        resumeThresholds: { packetLossPct: 6, latencyMs: 140, responseTimeMs: 240 },
+      };
+  }
+}
+
 function normalizeRecoveryPolicy(policy?: Partial<StressRecoveryPolicy>): StressRecoveryPolicy {
   const stopThresholds = policy?.stopThresholds;
   const resumeThresholds = policy?.resumeThresholds;

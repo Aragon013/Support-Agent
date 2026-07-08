@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
+import { RiskAndDriftPanel } from "@/components/RiskAndDriftPanel";
 
 type RunState = "idle" | "creating" | "running" | "polling" | "done" | "error";
 
@@ -111,6 +112,8 @@ type SecAuditSchedule = {
   nextRunAt: string;
   createdAt: string;
 };
+
+type RecoveryPresetType = "conservative" | "balanced" | "aggressive";
 
 type StressRecoveryPolicyInput = {
   autoResumeEnabled: boolean;
@@ -579,6 +582,7 @@ export function SecAuditPanel() {
   const [severityBuckets, setSeverityBuckets] = useState<PlanResultsResponse["severityBuckets"] | null>(null);
   const [comparison, setComparison] = useState<AuditComparison | null>(null);
   const [report, setReport] = useState<AuditReport | null>(null);
+  const [riskDriftAlert, setRiskDriftAlert] = useState<string | null>(null);
   const [batchEndpointIds, setBatchEndpointIds] = useState<string>("endpoint-dev-01, endpoint-dev-02");
   const [batchItems, setBatchItems] = useState<SecAuditBatch[]>([]);
   const [batchBusy, setBatchBusy] = useState<"idle" | "creating" | "loading" | "cancelling">("idle");
@@ -608,6 +612,7 @@ export function SecAuditPanel() {
     resumeLatencyMs: "140",
     resumeResponseTimeMs: "240",
   });
+  const [stressPreset, setStressPreset] = useState<RecoveryPresetType>("balanced");
   const [stressBusy, setStressBusy] = useState<"idle" | "running" | "loading">("idle");
   const [stressReports, setStressReports] = useState<StressReportItem[]>([]);
   const [stressError, setStressError] = useState<string | null>(null);
@@ -671,6 +676,55 @@ export function SecAuditPanel() {
       else next.add(id);
       return next;
     });
+  };
+
+  const applyRecoveryPreset = (preset: RecoveryPresetType) => {
+    const presets: Record<RecoveryPresetType, StressRecoveryPolicyInput> = {
+      conservative: {
+        autoResumeEnabled: true,
+        stopPacketLossPct: "25",
+        stopLatencyMs: "600",
+        stopResponseTimeMs: "1200",
+        resumeDelayMs: "500",
+        resumeBackoffMs: "500",
+        maxResumeAttempts: "1",
+        resumeProbeSamples: "3",
+        resumeHealthySamplesRequired: "3",
+        resumePacketLossPct: "10",
+        resumeLatencyMs: "300",
+        resumeResponseTimeMs: "600",
+      },
+      balanced: {
+        autoResumeEnabled: true,
+        stopPacketLossPct: "18",
+        stopLatencyMs: "320",
+        stopResponseTimeMs: "520",
+        resumeDelayMs: "2000",
+        resumeBackoffMs: "1000",
+        maxResumeAttempts: "2",
+        resumeProbeSamples: "2",
+        resumeHealthySamplesRequired: "2",
+        resumePacketLossPct: "6",
+        resumeLatencyMs: "140",
+        resumeResponseTimeMs: "240",
+      },
+      aggressive: {
+        autoResumeEnabled: true,
+        stopPacketLossPct: "8",
+        stopLatencyMs: "120",
+        stopResponseTimeMs: "240",
+        resumeDelayMs: "100",
+        resumeBackoffMs: "200",
+        maxResumeAttempts: "4",
+        resumeProbeSamples: "2",
+        resumeHealthySamplesRequired: "2",
+        resumePacketLossPct: "2",
+        resumeLatencyMs: "60",
+        resumeResponseTimeMs: "120",
+      },
+    };
+    setStressPreset(preset);
+    setStressPolicy(presets[preset]);
   };
 
   const submitClientFindings = async (
@@ -1591,7 +1645,51 @@ export function SecAuditPanel() {
             </div>
 
             <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
-              <p className="text-xs font-semibold text-slate-800">Safe-close Recovery Policy</p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold text-slate-800">Safe-close Recovery Policy</p>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => applyRecoveryPreset("conservative")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-[10px] font-semibold transition",
+                      stressPreset === "conservative"
+                        ? "border border-warn/50 bg-warn/30 text-warn"
+                        : "border border-slate-300 bg-slate-200 text-slate-600 hover:bg-slate-300",
+                    )}
+                  >
+                    Conservative
+                  </button>
+                  <button
+                    onClick={() => applyRecoveryPreset("balanced")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-[10px] font-semibold transition",
+                      stressPreset === "balanced"
+                        ? "border border-brand/50 bg-brand/30 text-brand"
+                        : "border border-slate-300 bg-slate-200 text-slate-600 hover:bg-slate-300",
+                    )}
+                  >
+                    Balanced
+                  </button>
+                  <button
+                    onClick={() => applyRecoveryPreset("aggressive")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-[10px] font-semibold transition",
+                      stressPreset === "aggressive"
+                        ? "border border-danger/50 bg-danger/30 text-danger"
+                        : "border border-slate-300 bg-slate-200 text-slate-600 hover:bg-slate-300",
+                    )}
+                  >
+                    Aggressive
+                  </button>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-600 mb-2">
+                {stressPreset === "conservative"
+                  ? "Tolerant: high stop thresholds, 1 resume attempt, deep recovery probe"
+                  : stressPreset === "aggressive"
+                    ? "Strict: low stop thresholds, 4 resume attempts, quick recovery probe"
+                    : "Balanced: moderate thresholds, 2 resume attempts, standard recovery"}
+              </p>
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 <label className="grid gap-1 text-[11px] text-slate-700">
                   <span>Auto Resume</span>
@@ -1771,6 +1869,32 @@ export function SecAuditPanel() {
               <h3 className="text-sm font-semibold text-slate-900">Execution Results</h3>
               <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px] text-slate-600">{runState}</span>
             </div>
+
+            {activePlanId ? (
+              <div className="mb-3">
+                <RiskAndDriftPanel
+                  planId={activePlanId}
+                  tenantId="default"
+                  onDriftAlert={(drift) => {
+                    setRiskDriftAlert(`Critical drift detected on ${drift.controlId}`);
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {riskDriftAlert ? (
+              <div className="mb-3 flex items-center justify-between rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+                <span>{riskDriftAlert}</span>
+                <button
+                  type="button"
+                  onClick={() => setRiskDriftAlert(null)}
+                  className="rounded border border-danger/30 bg-white px-2 py-0.5 text-[11px] text-danger"
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
+
             {summary ? (
               <div className="mb-4">
                 <div className="mb-3 grid grid-cols-2 gap-2 text-[11px] text-slate-700">

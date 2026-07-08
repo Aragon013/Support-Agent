@@ -5,6 +5,8 @@ import pg from "pg";
 import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
 import { InMemorySecAuditStressStore } from "../domain/secaudit-stress-store.js";
+import { InMemoryBaselineStore, InMemoryDriftStore, DriftDetectionService } from "../services/secaudit-drift-service.js";
+import { DriftAlertService, type DriftAlertConfig } from "../services/drift-alert-service.js";
 import { generateSecAuditPDF } from "../services/pdf-generator.js";
 import { buildSecAuditReport, generateSecAuditCSV } from "../services/secaudit-report.js";
 import { SecAuditStressDiagnostics } from "../services/secaudit-stress-diagnostics.js";
@@ -134,6 +136,17 @@ type StressReportQuery = {
   module?: "ethernet_resilience" | "wireless_density";
 };
 
+type CreateBaselineBody = {
+  planId: string;
+  tenantId: string;
+  modules: Array<{ id: string; findings?: Record<string, unknown> }>;
+};
+
+type RiskScoreQuery = {
+  planId: string;
+  tenantId: string;
+};
+
 type PreHandlerFn = (req: FastifyRequest, reply: FastifyReply, done: () => void) => void;
 
 function isNonEmptyString(value: unknown): value is string {
@@ -247,6 +260,49 @@ export function registerSecAuditRoutesWithDeps(
   const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
   const stressStore = deps.stressStore ?? new InMemorySecAuditStressStore();
   const stressDiagnostics = deps.stressDiagnostics ?? new SecAuditStressDiagnostics(stressStore);
+  const baselineStore = new InMemoryBaselineStore();
+  const driftStore = new InMemoryDriftStore();
+  const driftDetectionService = new DriftDetectionService(baselineStore, driftStore);
+  const driftAlertService = new DriftAlertService(
+    {
+      slack: process.env.SLACK_WEBHOOK_URL
+        ? {
+            enabled: true,
+            webhookUrl: process.env.SLACK_WEBHOOK_URL,
+            channel: process.env.SLACK_CHANNEL || "#security-alerts",
+          }
+        : { enabled: false, webhookUrl: "" },
+      teams: process.env.TEAMS_WEBHOOK_URL
+        ? {
+            enabled: true,
+            webhookUrl: process.env.TEAMS_WEBHOOK_URL,
+          }
+        : { enabled: false, webhookUrl: "" },
+      email: process.env.SMTP_URL
+        ? {
+            enabled: true,
+            smtpUrl: process.env.SMTP_URL,
+            fromAddress: process.env.ALERT_FROM_ADDRESS || "alerts@company.com",
+            recipients: (process.env.ALERT_RECIPIENTS || "").split(",").filter(Boolean),
+            recipientsOnCritical: (process.env.ALERT_RECIPIENTS_CRITICAL || "").split(",").filter(Boolean),
+          }
+        : { enabled: false, smtpUrl: "", fromAddress: "", recipients: [] },
+    },
+    {
+      httpClient: {
+        post: async (url: string, data: object) => {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+        },
+      },
+    },
+  );
   const onCriticalDrift = deps.onCriticalDrift;
   const batches = new Map<string, BatchRecord>();
   const schedules = new Map<string, ScheduleRecord>();
@@ -1285,6 +1341,134 @@ export function registerSecAuditRoutesWithDeps(
       }
       const items = store.listByTenant(tenantId);
       return reply.code(200).send({ items, count: items.length });
+    },
+  );
+
+  // === Drift Detection & Risk Scoring ===
+
+  app.post(
+    "/api/v1/secaudit/baselines",
+    async (req: FastifyRequest<{ Body: CreateBaselineBody }>, reply: FastifyReply) => {
+      const body = req.body;
+      if (!isNonEmptyString(body.planId) || !isNonEmptyString(body.tenantId)) {
+        return reply.code(400).send({ error: "planId and tenantId required" });
+      }
+      try {
+        const baseline = await driftDetectionService.createBaselineFromPlan(
+          body.planId,
+          body.tenantId,
+          body.modules ?? [],
+          "manual",
+        );
+        return reply.code(201).send(baseline);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "create_baseline_failed";
+        return reply.code(500).send({ error: msg });
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/baselines/:planId",
+    async (req: FastifyRequest<{ Params: { planId: string } }>, reply: FastifyReply) => {
+      const { planId } = req.params;
+      try {
+        const baselines = await baselineStore.listBaselines(planId, 20);
+        return reply.code(200).send({ items: baselines, count: baselines.length });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "list_baselines_failed";
+        return reply.code(500).send({ error: msg });
+      }
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/risk-score/:planId",
+    async (
+      req: FastifyRequest<{
+        Params: { planId: string };
+        Body: { tenantId: string; modules: Array<{ id: string; findings?: Record<string, unknown> }> };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const { planId } = req.params;
+      const { tenantId, modules } = req.body;
+
+      if (!isNonEmptyString(tenantId) || !Array.isArray(modules)) {
+        return reply.code(400).send({ error: "tenantId and modules array required" });
+      }
+
+      try {
+        const report = await driftDetectionService.generateRiskReport(planId, tenantId, modules);
+
+        // Detect drifts
+        const drifts = await driftDetectionService.detectDrifts(planId, tenantId, modules);
+
+        // Alert on critical drifts
+        if (drifts.some((d) => d.severity === "critical") && !driftAlertedPlanIds.has(planId)) {
+          try {
+            const plan = store.getById(planId);
+            const endpointId = plan && "endpointId" in plan && typeof plan.endpointId === "string" ? plan.endpointId : "";
+
+            // Send drift alerts via all configured channels
+            const criticalDrifts = drifts.filter((d) => d.severity === "critical");
+            await driftAlertService.sendAlert({
+              planId,
+              tenantId,
+              score: report.currentScore.aggregateScore,
+              scoreChange: report.scoreChange,
+              criticalDrifts,
+              recommendations: report.recommendations,
+              severity: DriftAlertService.severityForScore(report.currentScore.aggregateScore),
+              timestamp: new Date().toISOString(),
+            });
+
+            // Also trigger legacy onCriticalDrift callback if available
+            if (onCriticalDrift) {
+              await onCriticalDrift({
+                planId,
+                tenantId,
+                endpointId,
+                scoreDelta: report.scoreChange,
+                severityDelta: { critical: criticalDrifts.length, high: 0, medium: 0, low: 0, info: 0 },
+                baselinePlanId: null,
+              });
+            }
+
+            driftAlertedPlanIds.add(planId);
+            setTimeout(() => driftAlertedPlanIds.delete(planId), 60 * 60 * 1000);
+          } catch (err) {
+            console.error("drift_alert_failed:", err instanceof Error ? err.message : "unknown");
+          }
+        }
+
+        // Create new baseline if score is good (proactive snapshotting)
+        if (report.currentScore.aggregateScore < 40) {
+          await driftDetectionService.createBaselineFromPlan(planId, tenantId, modules, "auto_weekly");
+        }
+
+        return reply.code(200).send({ ...report, detectedDrifts: drifts });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "risk_score_failed";
+        return reply.code(500).send({ error: msg });
+      }
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/drifts/:planId",
+    async (req: FastifyRequest<{ Params: { planId: string }; Querystring: { since?: string } }>, reply: FastifyReply) => {
+      const { planId } = req.params;
+      const { since } = req.query;
+
+      try {
+        const sinceDate = since ? new Date(since) : undefined;
+        const drifts = await driftStore.getDriftsForPlan(planId, sinceDate);
+        return reply.code(200).send({ items: drifts, count: drifts.length });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "list_drifts_failed";
+        return reply.code(500).send({ error: msg });
+      }
     },
   );
 }

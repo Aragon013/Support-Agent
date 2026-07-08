@@ -454,6 +454,192 @@ describe("secaudit routes", () => {
     await app.close();
   });
 
+  it("executes drift pipeline end-to-end with alert cooldown", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-drift",
+        endpointId: "endpoint-drift-01",
+        operatorId: "operator-drift",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["host.os-posture", "host.firewall-edr"],
+      },
+    });
+
+    expect(create.statusCode).toBe(201);
+    const plan = create.json() as { id: string };
+
+    const baseline = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/baselines",
+      payload: {
+        planId: plan.id,
+        tenantId: "tenant-drift",
+        modules: [
+          { id: "host.os-posture", findings: { count: 0 } },
+          { id: "host.firewall-edr", findings: { count: 0 } },
+        ],
+      },
+    });
+
+    expect(baseline.statusCode).toBe(201);
+
+    const riskFirst = await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/risk-score/${plan.id}`,
+      payload: {
+        tenantId: "tenant-drift",
+        modules: [
+          { id: "host.os-posture", findings: { count: 1 } },
+          { id: "host.firewall-edr", findings: { count: 0 } },
+        ],
+      },
+    });
+
+    expect(riskFirst.statusCode).toBe(200);
+    const riskFirstBody = riskFirst.json() as {
+      detectedDrifts?: Array<{ severity: string; controlId: string }>;
+      currentScore: { aggregateScore: number };
+    };
+    expect(riskFirstBody.currentScore.aggregateScore).toBeGreaterThan(0);
+    expect((riskFirstBody.detectedDrifts ?? []).some((d) => d.severity === "critical")).toBe(true);
+
+    const driftsAfterFirst = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/drifts/${plan.id}`,
+    });
+
+    expect(driftsAfterFirst.statusCode).toBe(200);
+    const driftsBody = driftsAfterFirst.json() as { count: number; items: Array<{ severity: string; controlId: string }> };
+    expect(driftsBody.count).toBeGreaterThan(0);
+    expect(driftsBody.items.some((d) => d.severity === "critical" && d.controlId === "host.os-posture")).toBe(true);
+
+    const alertsAfterFirst = await app.inject({
+      method: "GET",
+      url: "/api/v1/alerts/events",
+      headers: {
+        "x-api-key": "dev-insecure-key-change-in-prod",
+      },
+    });
+
+    expect(alertsAfterFirst.statusCode).toBe(200);
+    const alertsFirstBody = alertsAfterFirst.json() as {
+      count: number;
+      items: Array<{ category: string; severity: string; title: string }>;
+    };
+    const driftAlertsFirst = alertsFirstBody.items.filter((evt) => evt.category === "drift");
+    expect(driftAlertsFirst.length).toBe(1);
+    expect(driftAlertsFirst[0]?.severity).toBe("critical");
+
+    const riskSecond = await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/risk-score/${plan.id}`,
+      payload: {
+        tenantId: "tenant-drift",
+        modules: [
+          { id: "host.os-posture", findings: { count: 1 } },
+          { id: "host.firewall-edr", findings: { count: 0 } },
+        ],
+      },
+    });
+
+    expect(riskSecond.statusCode).toBe(200);
+
+    const alertsAfterSecond = await app.inject({
+      method: "GET",
+      url: "/api/v1/alerts/events",
+      headers: {
+        "x-api-key": "dev-insecure-key-change-in-prod",
+      },
+    });
+
+    expect(alertsAfterSecond.statusCode).toBe(200);
+    const alertsSecondBody = alertsAfterSecond.json() as {
+      items: Array<{ category: string }>;
+    };
+    const driftAlertsSecond = alertsSecondBody.items.filter((evt) => evt.category === "drift");
+    expect(driftAlertsSecond.length).toBe(1);
+
+    await app.close();
+  });
+
+  it("lists baselines for a plan and filters drifts by since date", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-baseline-list",
+        endpointId: "ep-bl-01",
+        operatorId: "op-bl",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["host.os-posture"],
+      },
+    });
+
+    const plan = create.json() as { id: string };
+
+    const modules = [{ id: "host.os-posture", findings: { count: 0 } }];
+
+    // Create two baselines
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/baselines",
+      payload: { planId: plan.id, tenantId: "tenant-baseline-list", modules },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/baselines",
+      payload: { planId: plan.id, tenantId: "tenant-baseline-list", modules },
+    });
+
+    // GET baselines list
+    const listBaselines = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/baselines/${plan.id}`,
+    });
+    expect(listBaselines.statusCode).toBe(200);
+    const blBody = listBaselines.json() as { count: number; items: Array<{ id: string; planId: string }> };
+    expect(blBody.count).toBeGreaterThanOrEqual(2);
+    expect(blBody.items.every((b) => b.planId === plan.id)).toBe(true);
+
+    // Trigger drift so we have events to filter
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/risk-score/${plan.id}`,
+      payload: { tenantId: "tenant-baseline-list", modules: [{ id: "host.os-posture", findings: { count: 1 } }] },
+    });
+
+    // GET drifts without filter
+    const driftsAll = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/drifts/${plan.id}`,
+    });
+    expect(driftsAll.statusCode).toBe(200);
+    const allBody = driftsAll.json() as { count: number };
+    expect(allBody.count).toBeGreaterThan(0);
+
+    // GET drifts with future `since` → empty
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const driftsFuture = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/drifts/${plan.id}?since=${encodeURIComponent(future)}`,
+    });
+    expect(driftsFuture.statusCode).toBe(200);
+    const futureBody = driftsFuture.json() as { count: number };
+    expect(futureBody.count).toBe(0);
+
+    await app.close();
+  });
+
   it("dispatches extended mapped modules without catalog validation failures", async () => {
     const app = buildApp();
 

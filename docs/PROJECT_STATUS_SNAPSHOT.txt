@@ -218,6 +218,19 @@ TESTS Y VALIDACION
 - Resultado tests controller-electron:
 	- 2 archivos, 5 tests OK.
 - Build controller-electron:
+
+SECAUDIT - AVANCE FASE 4 (2026-07-08)
+- Flujo E2E de drift detection + alerting validado en rutas backend:
+	- Plan -> baseline -> risk-score -> drifts -> alerts/events.
+	- Caso agregado: cooldown de alertas (evita duplicados en la ventana de 1 hora).
+	- Archivo: apps/control-plane/src/api/secaudit-routes.test.ts
+- Validacion tecnica ejecutada:
+	- npm test -- src/api/secaudit-routes.test.ts -> OK (10/10)
+	- npm run build (control-plane) -> OK
+- Estado de fase:
+	- Backend drift + alerting: listo para pre-launch.
+	- UI Risk & Drift en Electron: integrada y compilando.
+	- Pendiente final de lanzamiento: smoke E2E manual con webhooks reales (Slack/Teams/SMTP) y checklist de despliegue.
 	- OK (renderer + electron).
 
 NOTA TECNICA IMPORTANTE
