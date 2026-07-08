@@ -26,6 +26,8 @@ Copy-Item -Force (Join-Path $controllerRoot "package.json") (Join-Path $stage "p
 RemoteSupportPro Controller Bundle (Windows)
 Version: $Version
 
+This package is for Operator/Client role only.
+
 Run instructions:
 1) Extract this bundle
 2) Install dependencies once:
