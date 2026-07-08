@@ -24,7 +24,9 @@ export type AuditEventCode =
   | "alerts.channel.auth_updated"
   | "alerts.channel.auth_cleared"
   | "alerts.channel.token_rotated"
-  | "alerts.test.dispatched";
+  | "alerts.test.dispatched"
+  | "resilience.scope.created"
+  | "resilience.exercise.planned";
 
 export type AuditLogRecord = {
   id: string;

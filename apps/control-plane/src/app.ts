@@ -9,6 +9,7 @@ import { registerSecAuditRoutesWithDeps } from "./api/secaudit-routes.js";
 import { registerComplianceRoutesWithDeps } from "./api/compliance-routes.js";
 import { registerExceptionRoutesWithDeps } from "./api/exception-routes.js";
 import { registerAlertRoutesWithDeps } from "./api/alert-routes.js";
+import { registerResilienceRoutesWithDeps } from "./api/resilience-routes.js";
 import { InMemoryAlertStore } from "./domain/alert-store.js";
 import { InMemoryExceptionStore } from "./domain/exception-store.js";
 import { InMemoryAuditLogStore } from "./domain/audit-log-store.js";
@@ -77,6 +78,7 @@ export function buildApp(): FastifyInstance {
       auditStore,
       requireAdminKey,
     });
+    registerResilienceRoutesWithDeps(app, { auditStore, requireAdminKey });
   });
 
   app.get("/health", async () => {
