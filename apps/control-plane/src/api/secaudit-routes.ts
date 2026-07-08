@@ -179,14 +179,28 @@ export function registerSecAuditRoutes(app: FastifyInstance): void {
 
 export function registerSecAuditRoutesWithDeps(
   app: FastifyInstance,
-  deps: { auditStore?: InMemoryAuditLogStore; requireAdminKey?: PreHandlerFn; planStore?: InMemorySecAuditPlanStore },
+  deps: {
+    auditStore?: InMemoryAuditLogStore;
+    requireAdminKey?: PreHandlerFn;
+    planStore?: InMemorySecAuditPlanStore;
+    onCriticalDrift?: (payload: {
+      planId: string;
+      tenantId: string;
+      endpointId: string;
+      scoreDelta: number | null;
+      severityDelta: { critical: number; high: number; medium: number; low: number; info: number };
+      baselinePlanId: string | null;
+    }) => Promise<void> | void;
+  },
 ): void {
   const store = deps.planStore ?? new InMemorySecAuditPlanStore();
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
   const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
+  const onCriticalDrift = deps.onCriticalDrift;
   const batches = new Map<string, BatchRecord>();
   const schedules = new Map<string, ScheduleRecord>();
   const remediationStates = new Map<string, RemediationState>();
+  const driftAlertedPlanIds = new Set<string>();
   const dbUrl = process.env.NODE_ENV === "test" ? undefined : process.env.SECAUDIT_DB_URL;
   const dbPool = dbUrl ? new pg.Pool({ connectionString: dbUrl }) : null;
   let persistenceHydrated = dbPool === null;
@@ -542,6 +556,37 @@ export function registerSecAuditRoutesWithDeps(
     return store.getById(plan.id) ?? null;
   };
 
+  const maybeEmitCriticalDrift = async (planId: string) => {
+    if (!onCriticalDrift) return;
+    if (driftAlertedPlanIds.has(planId)) return;
+
+    const plan = store.getById(planId);
+    if (!plan) return;
+    if (plan.status !== "completed" && plan.status !== "partial" && plan.status !== "failed") return;
+
+    const comparison = store.compare(planId);
+    if (!comparison || !comparison.baseline) return;
+
+    const scoreDelta = comparison.scoreDelta ?? 0;
+    const severityDelta = comparison.severityDelta;
+    const criticalRegression =
+      scoreDelta <= -10 ||
+      severityDelta.critical > 0 ||
+      severityDelta.high >= 2;
+
+    if (!criticalRegression) return;
+
+    driftAlertedPlanIds.add(planId);
+    await onCriticalDrift({
+      planId: plan.id,
+      tenantId: plan.tenantId,
+      endpointId: plan.endpointId,
+      scoreDelta: comparison.scoreDelta,
+      severityDelta,
+      baselinePlanId: comparison.baseline?.id ?? null,
+    });
+  };
+
   const summarizeBatch = (batch: BatchRecord) => {
     const plans = batch.planIds.map((id) => store.getById(id)).filter((x): x is NonNullable<typeof x> => Boolean(x));
     const completed = plans.filter((p) => p.status === "completed").length;
@@ -695,6 +740,12 @@ export function registerSecAuditRoutesWithDeps(
       const latest = await refreshPlan(req.params.id);
       if (!latest) {
         return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+
+      try {
+        await maybeEmitCriticalDrift(req.params.id);
+      } catch (error) {
+        app.log.error({ error, planId: req.params.id }, "Failed to emit critical drift alert");
       }
 
       return reply.code(200).send({

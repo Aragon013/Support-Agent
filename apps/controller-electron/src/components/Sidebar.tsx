@@ -7,13 +7,14 @@ import {
   Shield,
   ClipboardCheck,
   ShieldOff,
+  Bell,
   Activity,
   Radio,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export type NavTab = "support" | "commands" | "jobs" | "audit" | "secaudit" | "compliance" | "exceptions" | "monitor" | "sessions" | "settings";
+export type NavTab = "support" | "commands" | "jobs" | "audit" | "secaudit" | "compliance" | "exceptions" | "alerts" | "monitor" | "sessions" | "settings";
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ElementType }[] = [
   { id: "support",  label: "Support",  icon: LifeBuoy },
@@ -23,6 +24,7 @@ const NAV_ITEMS: { id: NavTab; label: string; icon: React.ElementType }[] = [
   { id: "secaudit",    label: "SecAudit",    icon: Shield },
   { id: "compliance", label: "Compliance", icon: ClipboardCheck },
   { id: "exceptions", label: "Exceptions", icon: ShieldOff },
+  { id: "alerts", label: "Alerts", icon: Bell },
   { id: "monitor",    label: "Monitor",    icon: Activity },
   { id: "sessions",  label: "Sessions",  icon: Radio },
   { id: "settings",  label: "Settings",  icon: Settings },

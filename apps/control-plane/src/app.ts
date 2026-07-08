@@ -8,9 +8,12 @@ import { registerSessionRoutesWithDeps } from "./api/session-routes.js";
 import { registerSecAuditRoutesWithDeps } from "./api/secaudit-routes.js";
 import { registerComplianceRoutesWithDeps } from "./api/compliance-routes.js";
 import { registerExceptionRoutesWithDeps } from "./api/exception-routes.js";
+import { registerAlertRoutesWithDeps } from "./api/alert-routes.js";
+import { InMemoryAlertStore } from "./domain/alert-store.js";
 import { InMemoryExceptionStore } from "./domain/exception-store.js";
 import { InMemoryAuditLogStore } from "./domain/audit-log-store.js";
 import { InMemorySecAuditPlanStore } from "./domain/secaudit-plan-store.js";
+import { AlertDispatcher } from "./services/alert-dispatcher.js";
 
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY ?? "dev-insecure-key-change-in-prod";
 
@@ -34,6 +37,8 @@ export function buildApp(): FastifyInstance {
     persistencePath,
   );
   const exceptionStore = new InMemoryExceptionStore();
+  const alertStore = new InMemoryAlertStore();
+  const alertDispatcher = new AlertDispatcher(alertStore);
 
   void app.register(rateLimit, {
     global: false, // aplica solo en rutas que lo declaren explícitamente
@@ -43,9 +48,30 @@ export function buildApp(): FastifyInstance {
   app.after(() => {
     registerCommandRoutesWithDeps(app, { auditStore, requireAdminKey });
     registerSessionRoutesWithDeps(app, { auditStore, requireAdminKey });
-    registerSecAuditRoutesWithDeps(app, { auditStore, requireAdminKey, planStore });
+    registerSecAuditRoutesWithDeps(app, {
+      auditStore,
+      requireAdminKey,
+      planStore,
+      onCriticalDrift: async ({ planId, tenantId, endpointId, scoreDelta, severityDelta, baselinePlanId }) => {
+        await alertDispatcher.dispatch({
+          category: "drift",
+          severity: "critical",
+          title: `Critical drift detected for ${planId}`,
+          message: `Score delta ${scoreDelta ?? 0}; critical +${severityDelta.critical}, high +${severityDelta.high}`,
+          context: {
+            planId,
+            tenantId,
+            endpointId,
+            baselinePlanId,
+            scoreDelta,
+            severityDelta,
+          },
+        });
+      },
+    });
     registerComplianceRoutesWithDeps(app, { planStore });
     registerExceptionRoutesWithDeps(app, { store: exceptionStore });
+    registerAlertRoutesWithDeps(app, { store: alertStore, dispatcher: alertDispatcher });
   });
 
   app.get("/health", async () => {
