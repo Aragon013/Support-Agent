@@ -215,6 +215,8 @@ function emitStateChanged(
   });
 }
 
+type PreHandlerFn = (req: FastifyRequest, reply: FastifyReply, done: () => void) => void;
+
 export function registerSessionRoutes(app: FastifyInstance): void {
   registerSessionRoutesWithDeps(app, {});
 }
@@ -223,6 +225,7 @@ export function registerSessionRoutesWithDeps(
   app: FastifyInstance,
   deps: {
     auditStore?: InMemoryAuditLogStore;
+    requireAdminKey?: PreHandlerFn;
   },
 ): void {
   const store = new InMemorySessionStore();
@@ -230,6 +233,7 @@ export function registerSessionRoutesWithDeps(
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
   const signalStore = new InMemorySessionSignalStore();
   const endpointRegistry = new InMemoryEndpointRegistry();
+  const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
   const wsHub = new SessionEventsWsHub();
   const signalWsHub = new SessionSignalWsHub(signalStore);
   const detachWs = wsHub.attach(eventBus);
@@ -248,12 +252,12 @@ export function registerSessionRoutesWithDeps(
   });
 
   /**
-   * POST /api/v1/endpoints
+   * POST /api/v1/endpoints — Admin only (x-api-key requerido)
    * Register or update an endpoint in the registry.
-   * Required fields: endpointId, installProfile
    */
   app.post(
     "/api/v1/endpoints",
+    { preHandler: requireAdminKey },
     async (
       req: FastifyRequest<{
         Body: {
@@ -311,10 +315,10 @@ export function registerSessionRoutesWithDeps(
   );
 
   /**
-   * GET /api/v1/endpoints
-   * List all registered endpoints (admin only).
+   * GET /api/v1/endpoints — Admin only (x-api-key requerido)
+   * List all registered endpoints.
    */
-  app.get("/api/v1/endpoints", async (req: FastifyRequest, reply: FastifyReply) => {
+  app.get("/api/v1/endpoints", { preHandler: requireAdminKey }, async (req: FastifyRequest, reply: FastifyReply) => {
     return reply.code(200).send({
       items: endpointRegistry.listAll(),
       count: endpointRegistry.listAll().length,

@@ -639,3 +639,169 @@ describe("session routes", () => {
     await app.close();
   });
 });
+
+describe("endpoint registry routes", () => {
+  const ADMIN_KEY = "dev-insecure-key-change-in-prod";
+
+  it("POST /api/v1/endpoints requires x-api-key", async () => {
+    const app = buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/endpoints",
+      payload: { endpointId: "laptop-001", installProfile: "support_full" },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json().code).toBe("unauthorized");
+
+    await app.close();
+  });
+
+  it("GET /api/v1/endpoints requires x-api-key", async () => {
+    const app = buildApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/endpoints",
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json().code).toBe("unauthorized");
+
+    await app.close();
+  });
+
+  it("POST /api/v1/endpoints registers an endpoint with valid key", async () => {
+    const app = buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/endpoints",
+      headers: { "x-api-key": ADMIN_KEY },
+      payload: {
+        endpointId: "laptop-001",
+        installProfile: "support_full",
+        licenseStatus: "active",
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.endpointId).toBe("laptop-001");
+    expect(body.installProfile).toBe("support_full");
+
+    await app.close();
+  });
+
+  it("POST /api/v1/endpoints validates endpointId is required", async () => {
+    const app = buildApp();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/endpoints",
+      headers: { "x-api-key": ADMIN_KEY },
+      payload: { installProfile: "support_full" },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().code).toBe("validation_error");
+
+    await app.close();
+  });
+
+  it("GET /api/v1/endpoints lists registered endpoints", async () => {
+    const app = buildApp();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/endpoints",
+      headers: { "x-api-key": ADMIN_KEY },
+      payload: { endpointId: "device-aaa", installProfile: "remote_only" },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/endpoints",
+      headers: { "x-api-key": ADMIN_KEY },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { items: Array<{ endpointId: string }>; count: number };
+    expect(body.count).toBeGreaterThanOrEqual(1);
+    expect(body.items.some((e) => e.endpointId === "device-aaa")).toBe(true);
+
+    await app.close();
+  });
+
+  it("GET /endpoints/:id/session-policy returns registry data for registered endpoint", async () => {
+    const app = buildApp();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/endpoints",
+      headers: { "x-api-key": ADMIN_KEY },
+      payload: {
+        endpointId: "registered-device",
+        installProfile: "support_limited_no_folders",
+        licenseStatus: "active",
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/endpoints/registered-device/session-policy",
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.source).toBe("registry");
+    expect(body.installProfile).toBe("support_limited_no_folders");
+    expect(body.supportCommandsAllowed).toBe(true);
+    expect(body.folderActionsAllowed).toBe(false);
+
+    await app.close();
+  });
+
+  it("GET /endpoints/:id/session-policy returns header-fallback for unknown endpoint in dev", async () => {
+    const app = buildApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/endpoints/unknown-device/session-policy",
+      headers: { "x-endpoint-install-profile": "support_full" },
+    });
+
+    // Either header-fallback (dev) or prod fallback, both 200
+    expect(res.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("POST /api/v1/endpoints with remote_only disables support commands", async () => {
+    const app = buildApp();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/endpoints",
+      headers: { "x-api-key": ADMIN_KEY },
+      payload: {
+        endpointId: "restricted-device",
+        installProfile: "remote_only",
+      },
+    });
+
+    const policy = await app.inject({
+      method: "GET",
+      url: "/api/v1/endpoints/restricted-device/session-policy",
+    });
+
+    expect(policy.statusCode).toBe(200);
+    const body = policy.json();
+    expect(body.installProfile).toBe("remote_only");
+    expect(body.supportCommandsAllowed).toBe(false);
+    expect(body.folderActionsAllowed).toBe(false);
+
+    await app.close();
+  });
+});

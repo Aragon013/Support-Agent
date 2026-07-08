@@ -2,6 +2,7 @@ import { Activity, Wifi, WifiOff } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/cn";
+import { BACKEND_URL } from "@/lib/backend-url";
 
 interface LiveEvent {
   seq: number;
@@ -19,7 +20,7 @@ export function MonitorPanel() {
   useEffect(() => {
     const connect = () => {
       const ws = new WebSocket(
-        "ws://localhost:3000/api/v1/commands/events/ws?tenantId=tenant-1",
+        `${BACKEND_URL.replace(/^http/, "ws")}/api/v1/commands/events/ws?tenantId=tenant-1`,
       );
       wsRef.current = ws;
       ws.onopen  = () => setConnected(true);

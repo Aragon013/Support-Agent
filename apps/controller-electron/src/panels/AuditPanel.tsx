@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { ShieldCheck, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { apiUrl } from "@/lib/backend-url";
 
 interface AuditRecord {
   id: string;
@@ -34,7 +35,7 @@ export function AuditPanel() {
     setLoading(true);
     try {
       const res = await fetch(
-        `http://localhost:3000/api/v1/audit?tenantId=${encodeURIComponent(tenantId)}`,
+        apiUrl(`/api/v1/audit?tenantId=${encodeURIComponent(tenantId)}`),
       );
       if (res.ok) {
         const body = await res.json() as { items: AuditRecord[] };

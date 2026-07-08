@@ -23,6 +23,17 @@ import { cn } from "@/lib/cn";
 import { resolveInstallProfile, type InstallProfile } from "./install-profile";
 import { mapErrorMessage } from "./error-messages";
 import { apiUrl } from "@/lib/backend-url";
+import { z } from "zod";
+
+const SessionPolicySchema = z.object({
+  endpointId: z.string(),
+  installProfile: z.enum(["remote_only", "support_limited_no_folders", "support_full"]).optional(),
+  supportCommandsAllowed: z.boolean().optional(),
+  folderActionsAllowed: z.boolean().optional(),
+  unattendedEnabled: z.boolean().optional(),
+  requiresUserConsent: z.boolean().optional(),
+  maxActiveControlSessions: z.number().optional(),
+});
 
 type CommandRisk = "low" | "medium" | "high";
 
@@ -670,8 +681,12 @@ export function SupportPanel() {
           throw new Error(friendlyError);
         }
 
-        const body = await res.json() as EndpointSessionPolicy;
-        setInstallProfile(resolveInstallProfile(body.installProfile));
+        const raw = await res.json();
+        const parsed = SessionPolicySchema.safeParse(raw);
+        if (!parsed.success) {
+          throw new Error("Unexpected policy response from server. Contact support.");
+        }
+        setInstallProfile(resolveInstallProfile(parsed.data.installProfile));
       } catch (err) {
         if (controller.signal.aborted) {
           return;

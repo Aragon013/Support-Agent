@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { RefreshCw, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { apiUrl, BACKEND_URL } from "@/lib/backend-url";
 
 type JobStatus =
   | "queued" | "dispatched" | "running" | "streaming"
@@ -45,7 +46,7 @@ export function JobsPanel() {
   const fetchJobs = async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:3000/api/v1/commands/jobs");
+      const res = await fetch(apiUrl("/api/v1/commands/jobs"));
       if (res.ok) {
         const body = await res.json() as { items: Job[] };
         setJobs(body.items ?? []);
@@ -61,7 +62,7 @@ export function JobsPanel() {
     void fetchJobs();
 
     const ws = new WebSocket(
-      "ws://localhost:3000/api/v1/commands/events/ws?tenantId=tenant-1",
+      `${BACKEND_URL.replace(/^http/, "ws")}/api/v1/commands/events/ws?tenantId=tenant-1`,
     );
     wsRef.current = ws;
 

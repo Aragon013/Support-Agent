@@ -157,6 +157,8 @@ function lifecycleAuditCode(status: CommandJobStatus): AuditEventCode {
   }
 }
 
+type PreHandlerFn = (req: FastifyRequest, reply: FastifyReply, done: () => void) => void;
+
 export function registerCommandRoutes(app: FastifyInstance): void {
   registerCommandRoutesWithDeps(app, {});
 }
@@ -165,12 +167,14 @@ export function registerCommandRoutesWithDeps(
   app: FastifyInstance,
   deps: {
     auditStore?: InMemoryAuditLogStore;
+    requireAdminKey?: PreHandlerFn;
   },
 ): void {
   const store = new InMemoryCommandJobStore();
   const mfaStore = new InMemoryMfaStepupStore();
   const eventBus = new InMemoryCommandEventBus();
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore(RETENTION_DAYS_DEFAULT);
+  const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
   const wsHub = new CommandEventsWsHub();
   const detachWs = wsHub.attach(eventBus);
 
@@ -246,6 +250,7 @@ export function registerCommandRoutesWithDeps(
 
   app.post(
     "/api/v1/mfa/challenges",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
     async (
       req: FastifyRequest<{ Body: CreateMfaChallengeBody }>,
       reply: FastifyReply,
@@ -279,8 +284,10 @@ export function registerCommandRoutesWithDeps(
     },
   );
 
+  // Rate limit estricto para prevenir brute-force de OTP (OWASP API4)
   app.post(
     "/api/v1/mfa/challenges/:id/verify",
+    { config: { rateLimit: { max: 5, timeWindow: "10 minutes", keyGenerator: (req) => (req.body as { operatorId?: string } | undefined)?.operatorId ?? req.ip } } },
     async (
       req: FastifyRequest<{ Params: IdParams; Body: VerifyMfaChallengeBody }>,
       reply: FastifyReply,
@@ -371,6 +378,7 @@ export function registerCommandRoutesWithDeps(
 
   app.post(
     "/api/v1/internal/retention/purge",
+    { preHandler: requireAdminKey },
     async (
       req: FastifyRequest<{ Body: PurgeBody }>,
       reply: FastifyReply,

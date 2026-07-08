@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, ChevronDown, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { apiUrl } from "@/lib/backend-url";
 
 const CATALOG = [
   { id: "diagnostic.system.info",   label: "System Info",       risk: "low",      params: [] },
@@ -39,7 +40,7 @@ export function CommandPanel() {
     setError(null);
 
     try {
-      const res = await fetch("http://localhost:3000/api/v1/commands/jobs", {
+      const res = await fetch(apiUrl("/api/v1/commands/jobs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

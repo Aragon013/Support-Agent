@@ -364,6 +364,7 @@ describe("command routes policy integration", () => {
     const purge = await app.inject({
       method: "POST",
       url: "/api/v1/internal/retention/purge",
+      headers: { "x-api-key": "dev-insecure-key-change-in-prod" },
       payload: {
         retentionDays: 0,
       },
@@ -403,6 +404,7 @@ describe("command routes policy integration", () => {
     const purge = await app.inject({
       method: "POST",
       url: "/api/v1/internal/retention/purge",
+      headers: { "x-api-key": "dev-insecure-key-change-in-prod" },
       payload: {
         retentionDays: 0,
       },
