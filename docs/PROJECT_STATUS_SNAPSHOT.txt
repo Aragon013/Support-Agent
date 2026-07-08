@@ -74,3 +74,95 @@ NOTA PARA RETOMA RAPIDA
 - No tocar selects por pedido del usuario.
 - Mantener lenguaje corto, accionable y no academico.
 - Priorizar experiencia de tecnico/ingeniero en operacion real.
+
+SECAUDIT - RUMBO ESTRATEGICO (2026-07-07)
+- El producto evoluciona de soporte remoto a plataforma de Soporte + CiberAuditoria operativa.
+- Nueva pestana funcional en controller-electron: SecAudit.
+- Objetivo de SecAudit:
+	- Ejecutar auditorias de seguridad por paquetes y personalizadas.
+	- Permitir auditorias sin sesion remota obligatoria (modo cliente local).
+	- Mantener ejecucion segura por defecto (safe-first).
+
+ORIGENES DE AUDITORIA SOPORTADOS (MODELO)
+- Host Audit:
+	- Auditoria en el endpoint remoto via host-agent.
+- Host Network Audit:
+	- Auditoria de red vista desde el endpoint remoto (lateral view).
+- Client Network Audit:
+	- Auditoria desde el cliente/operator (Electron local) sin remota.
+
+PAQUETES DE AUDITORIA (PRESETS)
+- Quick Audit (5-10 min):
+	- Postura basica, exposicion inmediata, higiene critica.
+- Standard Audit (15-30 min):
+	- Cobertura equilibrada host + red + hardening basico.
+- Deep Audit (45-120 min):
+	- Analisis profundo con correlacion de riesgo y evidencia extendida.
+- Incident Audit (10-25 min):
+	- Foco en contencion/investigacion rapida de incidente.
+- Compliance Audit (20-45 min):
+	- Controles orientados a cumplimiento (evidencias de postura).
+- Custom Audit (variable):
+	- Seleccion manual de modulos, origen y nivel de ejecucion.
+
+TIPOS DE AUDITORIA (CATALOGO OBJETIVO)
+- Host Baseline Audit:
+	- OS/version/EOL, parcheo, cifrado, firewall, AV/EDR.
+- Identity & Access Audit:
+	- Local admins, cuentas dormidas, privilegios elevados.
+- Application & Surface Audit:
+	- Puertos/listeners, persistencia startup, software vulnerable.
+- Network from Host Audit:
+	- DNS/gateway/rutas, exposicion LAN, SMB/RDP/WinRM/SSH posture.
+- Network from Client Audit:
+	- DNS/reachability/trazas desde la red del operador/cliente.
+- Threat Hunt Lite:
+	- IOC basicos, procesos/conexiones sospechosas.
+- Ransomware Resilience Audit:
+	- Backups, restore readiness, shares expuestas, hardening credenciales.
+
+MODO CUSTOM (DIFERENCIADOR)
+- Constructor por modulos con filtros por OS y origen.
+- Politica de ejecucion:
+	- Safe, Safe + Light, Deep.
+- Salidas objetivo:
+	- Ejecutivo, Tecnico, Remediacion.
+
+SCORING (ROADMAP)
+- Security Score 0-100 + sub-scores:
+	- Host, Identity, Network, Exposure, Resilience.
+- Severidades:
+	- Critical, High, Medium, Low, Info.
+- Tendencia temporal:
+	- Delta vs baseline anterior.
+
+ENTREGABLES (ROADMAP)
+- Reporte ejecutivo (1 pagina).
+- Reporte tecnico con evidencia.
+- Checklist de remediacion priorizada.
+- Delta report entre auditorias.
+- Export JSON/PDF + firma de integridad.
+
+ESTADO DE IMPLEMENTACION SECAUDIT (ARRANQUE)
+- Implementado en UI:
+	- Nueva pestana SecAudit integrada en App + Sidebar.
+	- Catalogo inicial de modulos con:
+		- Categoria, origen, OS, severidad, runtime estimado, nivel de ejecucion.
+	- Presets completos:
+		- quick, standard, deep, incident, compliance, custom.
+	- Selector de package + OS + origen.
+	- Constructor custom (toggle de modulos).
+	- Plan JSON generado para mapping backend-runner.
+- Pendiente inmediato:
+	- Endpoint backend para ejecutar planes SecAudit.
+	- Mapeo de modulos -> command runners host/client.
+	- Persistencia de resultados y scoring historico.
+
+FASE DE EJECUCION RECOMENDADA
+1) Engine SecAudit backend:
+	- API create/run/status/results para audit plans.
+2) Integracion host-agent:
+	- Runners por modulo y OS.
+3) Client audit runner (Electron main):
+	- Network checks locales via IPC.
+4) Reportes + scoring + baseline comparativo.

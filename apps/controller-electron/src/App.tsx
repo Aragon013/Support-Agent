@@ -5,6 +5,7 @@ import { Sidebar, type NavTab } from "@/components/Sidebar";
 import { CommandPanel } from "@/panels/CommandPanel";
 import { JobsPanel } from "@/panels/JobsPanel";
 import { AuditPanel } from "@/panels/AuditPanel";
+import { SecAuditPanel } from "@/panels/SecAuditPanel";
 import { MonitorPanel } from "@/panels/MonitorPanel";
 import { SessionsPanel } from "@/panels/SessionsPanel";
 import { SupportPanel } from "@/panels/SupportPanel";
@@ -15,6 +16,7 @@ const PANELS: Record<NavTab, React.ElementType> = {
   commands: CommandPanel,
   jobs:     JobsPanel,
   audit:    AuditPanel,
+  secaudit: SecAuditPanel,
   monitor:  MonitorPanel,
   sessions: SessionsPanel,
   settings: SettingsPanel,

@@ -1,0 +1,488 @@
+import { useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ShieldCheck,
+  ShieldAlert,
+  Network,
+  Laptop,
+  Server,
+  CheckCircle2,
+  Circle,
+  Clock3,
+  Filter,
+} from "lucide-react";
+import { cn } from "@/lib/cn";
+
+type AuditOrigin = "host" | "host_network" | "client_network";
+type OSType = "windows" | "linux" | "macos" | "all";
+type AuditLevel = "safe" | "safe_light" | "deep";
+type Severity = "critical" | "high" | "medium" | "low" | "info";
+type PackageId = "quick" | "standard" | "deep" | "incident" | "compliance" | "custom";
+
+type AuditModule = {
+  id: string;
+  name: string;
+  description: string;
+  category: "host_baseline" | "identity_access" | "app_surface" | "network" | "threat_hunt" | "resilience";
+  origins: AuditOrigin[];
+  os: OSType[];
+  estimatedMin: number;
+  level: AuditLevel;
+  defaultSeverity: Severity;
+};
+
+type AuditPackage = {
+  id: PackageId;
+  label: string;
+  description: string;
+  estimatedRange: string;
+  includes: string[]; // module ids
+};
+
+const ORIGIN_LABEL: Record<AuditOrigin, string> = {
+  host: "Host Audit",
+  host_network: "Host Network",
+  client_network: "Client Network",
+};
+
+const LEVEL_LABEL: Record<AuditLevel, string> = {
+  safe: "Safe",
+  safe_light: "Safe + Light",
+  deep: "Deep",
+};
+
+const SEVERITY_STYLE: Record<Severity, string> = {
+  critical: "border-danger/40 bg-danger/10 text-danger",
+  high: "border-danger/30 bg-danger/10 text-danger",
+  medium: "border-warn/30 bg-warn/10 text-warn",
+  low: "border-brand/30 bg-brand/10 text-brand",
+  info: "border-slate-700 bg-surface-900 text-slate-300",
+};
+
+const MODULES: AuditModule[] = [
+  {
+    id: "host.os-posture",
+    name: "OS Posture Baseline",
+    description: "Version, build, EOL risk, patch posture and encryption state.",
+    category: "host_baseline",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 3,
+    level: "safe",
+    defaultSeverity: "high",
+  },
+  {
+    id: "host.firewall-edr",
+    name: "Firewall + EDR Posture",
+    description: "Firewall profile status, AV/EDR health and tamper indicators.",
+    category: "host_baseline",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 2,
+    level: "safe",
+    defaultSeverity: "high",
+  },
+  {
+    id: "host.identity-admins",
+    name: "Identity & Local Admin Audit",
+    description: "Local admins, dormant users, elevated sessions and policy weakness.",
+    category: "identity_access",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 4,
+    level: "safe",
+    defaultSeverity: "high",
+  },
+  {
+    id: "host.surface-ports",
+    name: "Exposure Surface Audit",
+    description: "Open listeners, risky services, startup persistence and app inventory.",
+    category: "app_surface",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 6,
+    level: "safe_light",
+    defaultSeverity: "medium",
+  },
+  {
+    id: "net.host-segment",
+    name: "Network Audit from Host",
+    description: "DNS/gateway/routes, LAN exposure and critical protocol posture.",
+    category: "network",
+    origins: ["host_network"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 8,
+    level: "safe_light",
+    defaultSeverity: "medium",
+  },
+  {
+    id: "net.client-health",
+    name: "Client Network Health Audit",
+    description: "Connectivity, DNS, route checks and service reachability from operator side.",
+    category: "network",
+    origins: ["client_network"],
+    os: ["all"],
+    estimatedMin: 5,
+    level: "safe",
+    defaultSeverity: "medium",
+  },
+  {
+    id: "threat.hunt-lite",
+    name: "Threat Hunt Lite",
+    description: "Suspicious processes, known IOC patterns and outbound anomalies.",
+    category: "threat_hunt",
+    origins: ["host", "host_network"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 12,
+    level: "deep",
+    defaultSeverity: "critical",
+  },
+  {
+    id: "resilience.ransomware",
+    name: "Ransomware Resilience Audit",
+    description: "Backup signals, restore posture, share exposure and credential protection.",
+    category: "resilience",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 9,
+    level: "safe_light",
+    defaultSeverity: "high",
+  },
+];
+
+const PACKAGES: AuditPackage[] = [
+  {
+    id: "quick",
+    label: "Quick Audit",
+    description: "Fast posture check for immediate risk and triage.",
+    estimatedRange: "5-10 min",
+    includes: ["host.os-posture", "host.firewall-edr", "net.client-health"],
+  },
+  {
+    id: "standard",
+    label: "Standard Audit",
+    description: "Balanced host + network coverage for daily operations.",
+    estimatedRange: "15-30 min",
+    includes: [
+      "host.os-posture",
+      "host.firewall-edr",
+      "host.identity-admins",
+      "host.surface-ports",
+      "net.host-segment",
+      "net.client-health",
+    ],
+  },
+  {
+    id: "deep",
+    label: "Deep Audit",
+    description: "Extended analysis with deep checks and high-confidence evidence.",
+    estimatedRange: "45-120 min",
+    includes: [
+      "host.os-posture",
+      "host.firewall-edr",
+      "host.identity-admins",
+      "host.surface-ports",
+      "net.host-segment",
+      "net.client-health",
+      "threat.hunt-lite",
+      "resilience.ransomware",
+    ],
+  },
+  {
+    id: "incident",
+    label: "Incident Audit",
+    description: "Incident-first checks for rapid containment and investigation.",
+    estimatedRange: "10-25 min",
+    includes: ["host.identity-admins", "host.surface-ports", "threat.hunt-lite"],
+  },
+  {
+    id: "compliance",
+    label: "Compliance Audit",
+    description: "Policy-oriented baseline for control evidence collection.",
+    estimatedRange: "20-45 min",
+    includes: ["host.os-posture", "host.firewall-edr", "host.identity-admins", "resilience.ransomware"],
+  },
+  {
+    id: "custom",
+    label: "Custom Audit",
+    description: "Build your own audit by selecting modules and execution level.",
+    estimatedRange: "Variable",
+    includes: [],
+  },
+];
+
+function categoryLabel(cat: AuditModule["category"]): string {
+  switch (cat) {
+    case "host_baseline":
+      return "Host Baseline";
+    case "identity_access":
+      return "Identity & Access";
+    case "app_surface":
+      return "App & Surface";
+    case "network":
+      return "Network";
+    case "threat_hunt":
+      return "Threat Hunt";
+    case "resilience":
+      return "Resilience";
+  }
+}
+
+export function SecAuditPanel() {
+  const [selectedPackage, setSelectedPackage] = useState<PackageId>("quick");
+  const [targetOs, setTargetOs] = useState<OSType>("windows");
+  const [originFilter, setOriginFilter] = useState<AuditOrigin | "all">("all");
+  const [customSelected, setCustomSelected] = useState<Set<string>>(new Set(PACKAGES.find((x) => x.id === "quick")?.includes ?? []));
+
+  const packageMeta = useMemo(
+    () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
+    [selectedPackage],
+  );
+
+  const activeModuleIds = useMemo(() => {
+    if (selectedPackage === "custom") {
+      return customSelected;
+    }
+    return new Set(packageMeta.includes);
+  }, [selectedPackage, customSelected, packageMeta]);
+
+  const visibleModules = useMemo(() => {
+    return MODULES.filter((m) => {
+      const osOk = m.os.includes("all") || targetOs === "all" || m.os.includes(targetOs);
+      const originOk = originFilter === "all" || m.origins.includes(originFilter);
+      return osOk && originOk;
+    });
+  }, [targetOs, originFilter]);
+
+  const selectedModules = useMemo(
+    () => MODULES.filter((m) => activeModuleIds.has(m.id)),
+    [activeModuleIds],
+  );
+
+  const totalMinutes = useMemo(
+    () => selectedModules.reduce((acc, m) => acc + m.estimatedMin, 0),
+    [selectedModules],
+  );
+
+  const executionLevel = useMemo<AuditLevel>(() => {
+    if (selectedModules.some((m) => m.level === "deep")) return "deep";
+    if (selectedModules.some((m) => m.level === "safe_light")) return "safe_light";
+    return "safe";
+  }, [selectedModules]);
+
+  const planJson = useMemo(
+    () => JSON.stringify(
+      {
+        package: selectedPackage,
+        targetOs,
+        originFilter,
+        executionLevel,
+        modules: selectedModules.map((m) => m.id),
+        estimatedMinutes: totalMinutes,
+      },
+      null,
+      2,
+    ),
+    [selectedPackage, targetOs, originFilter, executionLevel, selectedModules, totalMinutes],
+  );
+
+  const toggleCustom = (id: string) => {
+    setCustomSelected((old) => {
+      const next = new Set(old);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-5 p-6 text-slate-900">
+      <section className="tv-panel p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-brand">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              SecAudit
+            </div>
+            <h2 className="mt-2 text-xl font-semibold text-slate-900">Cybersecurity Audit Workspace</h2>
+            <p className="mt-1 text-sm text-slate-600">Run host, host-network and client-network audits by package or custom plan.</p>
+          </div>
+          <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-slate-700">
+            <div className="flex items-center gap-2 font-semibold">
+              <Clock3 className="h-3.5 w-3.5" />
+              Est. runtime: {totalMinutes} min
+            </div>
+            <p className="mt-1">Execution level: {LEVEL_LABEL[executionLevel]}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2 md:grid-cols-3">
+          <label className="grid gap-1">
+            <span className="text-xs font-medium text-slate-600">Target OS</span>
+            <select
+              value={targetOs}
+              onChange={(e) => setTargetOs(e.target.value as OSType)}
+              className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+            >
+              <option value="windows">Windows</option>
+              <option value="linux">Linux</option>
+              <option value="macos">macOS</option>
+              <option value="all">Any</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1">
+            <span className="text-xs font-medium text-slate-600">Origin Scope</span>
+            <select
+              value={originFilter}
+              onChange={(e) => setOriginFilter(e.target.value as AuditOrigin | "all")}
+              className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+            >
+              <option value="all">All Origins</option>
+              <option value="host">Host Audit</option>
+              <option value="host_network">Host Network</option>
+              <option value="client_network">Client Network</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1">
+            <span className="text-xs font-medium text-slate-600">Package</span>
+            <select
+              value={selectedPackage}
+              onChange={(e) => {
+                const next = e.target.value as PackageId;
+                setSelectedPackage(next);
+                if (next !== "custom") {
+                  setCustomSelected(new Set(PACKAGES.find((p) => p.id === next)?.includes ?? []));
+                }
+              }}
+              className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+            >
+              {PACKAGES.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-slate-700">
+          <p className="font-semibold">{packageMeta.label} · {packageMeta.estimatedRange}</p>
+          <p className="mt-0.5">{packageMeta.description}</p>
+        </div>
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+        <section className="tv-panel p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-900">Audit Modules</h3>
+            <span className="rounded-full border border-blue-100 bg-white px-2.5 py-1 text-[11px] text-slate-600">
+              <Filter className="mr-1 inline h-3.5 w-3.5" />
+              {visibleModules.length} visible
+            </span>
+          </div>
+
+          <div className="grid gap-2">
+            <AnimatePresence initial={false}>
+              {visibleModules.map((m) => {
+                const isSelected = activeModuleIds.has(m.id);
+                const canToggle = selectedPackage === "custom";
+                return (
+                  <motion.button
+                    key={m.id}
+                    layout
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -5 }}
+                    onClick={() => {
+                      if (canToggle) toggleCustom(m.id);
+                    }}
+                    className={cn(
+                      "rounded-xl border px-3 py-3 text-left shadow-sm transition",
+                      isSelected ? "border-brand/40 bg-brand/10" : "border-blue-100 bg-white",
+                      canToggle ? "cursor-pointer hover:border-brand/40" : "cursor-default",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{m.name}</p>
+                        <p className="mt-0.5 text-xs text-slate-600">{m.description}</p>
+                      </div>
+                      {isSelected ? <CheckCircle2 className="h-4 w-4 text-success" /> : <Circle className="h-4 w-4 text-slate-400" />}
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                      <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-slate-600">{categoryLabel(m.category)}</span>
+                      <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-slate-600">{m.estimatedMin} min</span>
+                      <span className={cn("rounded-full border px-2 py-0.5", SEVERITY_STYLE[m.defaultSeverity])}>{m.defaultSeverity}</span>
+                      {m.origins.map((o) => (
+                        <span key={o} className="rounded-full border border-slate-700 bg-surface-900 px-2 py-0.5 text-slate-300">{ORIGIN_LABEL[o]}</span>
+                      ))}
+                    </div>
+                  </motion.button>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div className="tv-panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Execution Plan</h3>
+              <span className="rounded-full border border-brand/30 bg-brand/10 px-2.5 py-1 text-[11px] text-brand">{selectedModules.length} modules</span>
+            </div>
+
+            <div className="grid gap-2 text-sm">
+              {selectedModules.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-blue-100 bg-blue-50/40 px-3 py-4 text-sm text-slate-500">
+                  No module selected. Switch to Custom and choose modules.
+                </div>
+              ) : (
+                selectedModules.map((m) => (
+                  <div key={m.id} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                    <p className="font-medium text-slate-900">{m.name}</p>
+                    <p className="text-xs text-slate-500">{m.id}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="tv-panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Run Profile</h3>
+              <ShieldAlert className="h-4 w-4 text-warn" />
+            </div>
+
+            <div className="grid gap-2 text-xs text-slate-700">
+              <div className="rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2">
+                <p className="font-semibold">Package</p>
+                <p>{packageMeta.label}</p>
+              </div>
+              <div className="rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2">
+                <p className="font-semibold">Execution</p>
+                <p>{LEVEL_LABEL[executionLevel]} · {totalMinutes} min</p>
+              </div>
+              <div className="rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2">
+                <p className="font-semibold">Origins</p>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {Array.from(new Set(selectedModules.flatMap((m) => m.origins))).map((o) => (
+                    <span key={o} className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px]">
+                      {o === "host" ? <Server className="mr-1 inline h-3 w-3" /> : o === "host_network" ? <Network className="mr-1 inline h-3 w-3" /> : <Laptop className="mr-1 inline h-3 w-3" />}
+                      {ORIGIN_LABEL[o]}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <details className="mt-3 rounded-lg border border-blue-100 bg-white p-2">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-700">Plan JSON (for backend runner mapping)</summary>
+              <pre className="mt-2 max-h-52 overflow-auto rounded bg-slate-950 p-2 text-[11px] text-slate-200">{planJson}</pre>
+            </details>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
