@@ -18,7 +18,13 @@ export type AuditEventCode =
   | "session.signal.policy_denied"
   | "endpoint.registered"
   | "endpoint.policy.header_override"
-  | "endpoint.policy.not_found";
+  | "endpoint.policy.not_found"
+  | "alerts.channel.created"
+  | "alerts.channel.updated"
+  | "alerts.channel.auth_updated"
+  | "alerts.channel.auth_cleared"
+  | "alerts.channel.token_rotated"
+  | "alerts.test.dispatched";
 
 export type AuditLogRecord = {
   id: string;

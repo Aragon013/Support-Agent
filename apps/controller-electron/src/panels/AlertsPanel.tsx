@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BellRing, Send, Plus, CheckCircle2, XCircle } from "lucide-react";
+import { BellRing, Send, Plus, CheckCircle2, XCircle, RefreshCcw } from "lucide-react";
 import { apiUrl } from "@/lib/backend-url";
 import { cn } from "@/lib/cn";
 
@@ -143,6 +143,28 @@ export function AlertsPanel() {
     }
   };
 
+  const rotateToken = async (channel: AlertChannel) => {
+    if (channel.type === "email") return;
+    const nextToken = window.prompt(`Rotate token for ${channel.name}`, "");
+    if (!nextToken || !nextToken.trim()) return;
+    const nextHeaderRaw = window.prompt("Header name", channel.auth?.headerName ?? "Authorization");
+    const nextHeader = nextHeaderRaw && nextHeaderRaw.trim().length > 0 ? nextHeaderRaw.trim() : undefined;
+    try {
+      const res = await fetch(apiUrl(`/api/v1/alerts/channels/${channel.id}/rotate-token`), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          authToken: nextToken.trim(),
+          ...(nextHeader !== undefined ? { authHeaderName: nextHeader } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error(`rotate_http_${res.status}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to rotate token");
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5 p-6 text-slate-900">
       <section className="tv-panel p-5">
@@ -224,17 +246,29 @@ export function AlertsPanel() {
                 <p className="text-[11px] text-slate-500">{ch.type} · {ch.target}</p>
                 {ch.auth ? <p className="text-[11px] text-slate-400">{ch.auth.headerName}: {ch.auth.tokenMasked}</p> : null}
               </div>
-              <button
-                onClick={() => toggleChannel(ch)}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] font-semibold",
-                  ch.enabled
-                    ? "border-success/30 bg-success/10 text-success"
-                    : "border-slate-300 bg-slate-100 text-slate-600",
-                )}
-              >
-                {ch.enabled ? "enabled" : "disabled"}
-              </button>
+              <div className="flex items-center gap-1.5">
+                {ch.type !== "email" ? (
+                  <button
+                    onClick={() => rotateToken(ch)}
+                    className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand/10 px-2.5 py-1 text-[11px] font-semibold text-brand"
+                    title="Rotate auth token"
+                  >
+                    <RefreshCcw className="h-3 w-3" />
+                    rotate
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => toggleChannel(ch)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11px] font-semibold",
+                    ch.enabled
+                      ? "border-success/30 bg-success/10 text-success"
+                      : "border-slate-300 bg-slate-100 text-slate-600",
+                  )}
+                >
+                  {ch.enabled ? "enabled" : "disabled"}
+                </button>
+              </div>
             </div>
           ))}
         </div>

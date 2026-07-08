@@ -128,4 +128,51 @@ describe("alert routes", () => {
 
     await app.close();
   });
+
+  it("rotates token and writes audit trail entries", async () => {
+    const app = buildApp();
+    const headers = {
+      "x-tenant-id": "tenant-alerts",
+      "x-operator-id": "operator-alerts",
+    };
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/alerts/channels",
+      headers,
+      payload: {
+        name: "Ops Webhook",
+        type: "webhook",
+        target: "https://example.com/ops",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as { id: string };
+
+    const rotate = await app.inject({
+      method: "POST",
+      url: `/api/v1/alerts/channels/${created.id}/rotate-token`,
+      headers,
+      payload: {
+        authToken: "rotated-super-secret-token",
+        authHeaderName: "X-Webhook-Token",
+      },
+    });
+    expect(rotate.statusCode).toBe(200);
+    const rotated = rotate.json() as { auth?: { headerName?: string; tokenMasked?: string } };
+    expect(rotated.auth?.headerName).toBe("X-Webhook-Token");
+    expect(rotated.auth?.tokenMasked).toBeDefined();
+    expect(rotated.auth?.tokenMasked).not.toContain("rotated-super-secret-token");
+
+    const audit = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit?tenantId=tenant-alerts&operatorId=operator-alerts",
+    });
+    expect(audit.statusCode).toBe(200);
+    const auditBody = audit.json() as { items: Array<{ code: string }> };
+    expect(auditBody.items.some((x) => x.code === "alerts.channel.created")).toBe(true);
+    expect(auditBody.items.some((x) => x.code === "alerts.channel.token_rotated")).toBe(true);
+
+    await app.close();
+  });
 });
