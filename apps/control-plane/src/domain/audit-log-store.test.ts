@@ -84,4 +84,16 @@ describe("InMemoryAuditLogStore", () => {
     expect(report.byTenant.t1).toBe(1);
     expect(report.byTenant.t2).toBeUndefined();
   });
+
+  it("supports tenant-specific retention overrides", () => {
+    const store = new InMemoryAuditLogStore(90);
+
+    expect(store.getRetentionDaysForTenant("tenant-1")).toBe(90);
+
+    store.setRetentionDaysForTenant("tenant-1", 14);
+    expect(store.getRetentionDaysForTenant("tenant-1")).toBe(14);
+
+    store.clearRetentionDaysForTenant("tenant-1");
+    expect(store.getRetentionDaysForTenant("tenant-1")).toBe(90);
+  });
 });

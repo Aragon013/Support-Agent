@@ -72,6 +72,7 @@ function redactDetails(input: Record<string, unknown>): Record<string, unknown> 
 
 export class InMemoryAuditLogStore {
   private readonly records: AuditLogRecord[] = [];
+  private readonly tenantRetentionDays = new Map<string, number>();
 
   constructor(
     private readonly retentionDays = 90,
@@ -184,6 +185,18 @@ export class InMemoryAuditLogStore {
    * En el futuro, esto podría leerse de una BD por-tenant.
    */
   getRetentionDaysForTenant(_tenantId: string): number {
-    return this.retentionDays;
+    return this.tenantRetentionDays.get(_tenantId) ?? this.retentionDays;
+  }
+
+  setRetentionDaysForTenant(tenantId: string, retentionDays: number): void {
+    if (!Number.isFinite(retentionDays) || retentionDays < 0) {
+      throw new RangeError("retentionDays must be a number >= 0");
+    }
+
+    this.tenantRetentionDays.set(tenantId, Math.floor(retentionDays));
+  }
+
+  clearRetentionDaysForTenant(tenantId: string): void {
+    this.tenantRetentionDays.delete(tenantId);
   }
 }

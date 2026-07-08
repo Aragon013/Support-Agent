@@ -387,13 +387,16 @@ export function registerCommandRoutesWithDeps(
       reply: FastifyReply,
     ) => {
       const body = req.body;
+      const tenantId = isNonEmptyString(body?.tenantId) ? body.tenantId : undefined;
       const requestedDays = body?.retentionDays;
       const retentionDays =
         typeof requestedDays === "number" &&
         Number.isFinite(requestedDays) &&
         requestedDays >= 0
           ? Math.floor(requestedDays)
-          : RETENTION_DAYS_DEFAULT;
+          : tenantId
+            ? auditStore.getRetentionDaysForTenant(tenantId)
+            : RETENTION_DAYS_DEFAULT;
 
       if (
         requestedDays !== undefined &&
@@ -405,11 +408,11 @@ export function registerCommandRoutesWithDeps(
         });
       }
 
-      const report = runRetentionPurge(retentionDays, isNonEmptyString(body?.tenantId) ? body.tenantId : undefined);
+      const report = runRetentionPurge(retentionDays, tenantId);
       return {
         policy: {
           retentionDays,
-          tenantId: isNonEmptyString(body?.tenantId) ? body.tenantId : "all",
+          tenantId: tenantId ?? "all",
           preserveAuditCodes: [...PRESERVE_AUDIT_CODES],
           preserveEnvelopeKinds: [...PRESERVE_ENVELOPE_KINDS],
         },
