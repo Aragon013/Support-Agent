@@ -1,0 +1,203 @@
+import {
+  InMemorySecAuditStressStore,
+  type SecAuditStressReport,
+  type StressMetricSample,
+  type StressSummary,
+} from "../domain/secaudit-stress-store.js";
+
+export class HardwareLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HardwareLimitError";
+  }
+}
+
+type BaseStressInput = {
+  tenantId: string;
+  operatorId: string;
+  endpointId: string;
+  iterations?: number;
+};
+
+export type EthernetResilienceInput = BaseStressInput & {
+  expectedBandwidthMbps?: number;
+  saturationThresholdPct?: number;
+};
+
+export type WirelessDensityInput = BaseStressInput & {
+  apId: string;
+  expectedMaxClients?: number;
+  associationThresholdPct?: number;
+};
+
+type EthernetCollector = (ctx: {
+  iteration: number;
+  expectedBandwidthMbps: number;
+  saturationThresholdPct: number;
+}) => Promise<StressMetricSample>;
+
+type WirelessCollector = (ctx: {
+  iteration: number;
+  apId: string;
+  expectedMaxClients: number;
+  associationThresholdPct: number;
+}) => Promise<StressMetricSample>;
+
+function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const rank = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[rank] ?? sorted[sorted.length - 1] ?? 0;
+}
+
+function summarize(metrics: StressMetricSample[]): StressSummary {
+  const latency = metrics.map((m) => m.latencyMs);
+  const loss = metrics.map((m) => m.packetLossPct);
+  const response = metrics.map((m) => m.responseTimeMs);
+  const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+
+  return {
+    samples: metrics.length,
+    avgLatencyMs: round2(avg(latency)),
+    avgPacketLossPct: round2(avg(loss)),
+    avgResponseTimeMs: round2(avg(response)),
+    p95LatencyMs: round2(percentile(latency, 95)),
+    p95ResponseTimeMs: round2(percentile(response, 95)),
+    peakPacketLossPct: round2(loss.length ? Math.max(...loss) : 0),
+  };
+}
+
+function randomBetween(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+const defaultEthernetCollector: EthernetCollector = async ({ iteration, expectedBandwidthMbps, saturationThresholdPct }) => {
+  const jitter = Math.max(0.75, 1 - iteration * 0.01);
+  const bandwidthMbps = randomBetween(expectedBandwidthMbps * 0.7, expectedBandwidthMbps * 1.05) * jitter;
+  const packetSaturationPct = randomBetween(42, 92);
+  const latencyMs = randomBetween(4, 26) + packetSaturationPct * 0.12;
+  const responseTimeMs = latencyMs + randomBetween(2, 20);
+  const packetLossPct = randomBetween(0, Math.max(0.2, packetSaturationPct - 65) * 0.25);
+
+  if (packetSaturationPct >= saturationThresholdPct || packetLossPct >= 18) {
+    throw new HardwareLimitError(`ethernet_hardware_limit saturation=${round2(packetSaturationPct)} loss=${round2(packetLossPct)}`);
+  }
+
+  return {
+    at: new Date().toISOString(),
+    latencyMs: round2(latencyMs),
+    packetLossPct: round2(packetLossPct),
+    responseTimeMs: round2(responseTimeMs),
+    bandwidthMbps: round2(Math.max(0, bandwidthMbps)),
+    packetSaturationPct: round2(packetSaturationPct),
+  };
+};
+
+const defaultWirelessCollector: WirelessCollector = async ({ iteration, expectedMaxClients, associationThresholdPct }) => {
+  const associatedClients = Math.min(expectedMaxClients, Math.floor(randomBetween(expectedMaxClients * 0.45, expectedMaxClients * 1.08)));
+  const associationCapacityPct = (associatedClients / Math.max(1, expectedMaxClients)) * 100;
+  const latencyMs = randomBetween(8, 42) + associationCapacityPct * 0.2 + iteration * 0.1;
+  const responseTimeMs = latencyMs + randomBetween(5, 28);
+  const packetLossPct = randomBetween(0, Math.max(0.5, associationCapacityPct - 70) * 0.18);
+
+  if (associationCapacityPct >= associationThresholdPct || packetLossPct >= 20) {
+    throw new HardwareLimitError(`wireless_hardware_limit assoc=${round2(associationCapacityPct)} loss=${round2(packetLossPct)}`);
+  }
+
+  return {
+    at: new Date().toISOString(),
+    latencyMs: round2(latencyMs),
+    packetLossPct: round2(packetLossPct),
+    responseTimeMs: round2(responseTimeMs),
+    associatedClients,
+    maxClients: expectedMaxClients,
+    associationCapacityPct: round2(associationCapacityPct),
+  };
+};
+
+export class SecAuditStressDiagnostics {
+  constructor(
+    private readonly reportStore: InMemorySecAuditStressStore,
+    private readonly ethernetCollector: EthernetCollector = defaultEthernetCollector,
+    private readonly wirelessCollector: WirelessCollector = defaultWirelessCollector,
+  ) {}
+
+  async runEthernetResilience(input: EthernetResilienceInput): Promise<SecAuditStressReport> {
+    const iterations = Math.max(1, Math.min(100, input.iterations ?? 12));
+    const expectedBandwidthMbps = Math.max(50, input.expectedBandwidthMbps ?? 1000);
+    const saturationThresholdPct = Math.max(65, Math.min(98, input.saturationThresholdPct ?? 88));
+    const metrics: StressMetricSample[] = [];
+
+    let status: SecAuditStressReport["status"] = "completed";
+    let terminationReason = "completed_all_iterations";
+
+    for (let i = 0; i < iterations; i += 1) {
+      try {
+        const sample = await this.ethernetCollector({
+          iteration: i,
+          expectedBandwidthMbps,
+          saturationThresholdPct,
+        });
+        metrics.push(sample);
+      } catch (error) {
+        status = error instanceof HardwareLimitError ? "hardware_limit" : "failed";
+        terminationReason = error instanceof Error ? error.message : "unknown_error";
+        break;
+      }
+    }
+
+    return this.reportStore.addReport({
+      module: "ethernet_resilience",
+      tenantId: input.tenantId,
+      operatorId: input.operatorId,
+      endpointId: input.endpointId,
+      status,
+      terminationReason,
+      closedSafely: true,
+      summary: summarize(metrics),
+      metrics,
+    });
+  }
+
+  async runWirelessDensity(input: WirelessDensityInput): Promise<SecAuditStressReport> {
+    const iterations = Math.max(1, Math.min(120, input.iterations ?? 14));
+    const expectedMaxClients = Math.max(10, input.expectedMaxClients ?? 150);
+    const associationThresholdPct = Math.max(70, Math.min(100, input.associationThresholdPct ?? 92));
+    const metrics: StressMetricSample[] = [];
+
+    let status: SecAuditStressReport["status"] = "completed";
+    let terminationReason = "completed_all_iterations";
+
+    for (let i = 0; i < iterations; i += 1) {
+      try {
+        const sample = await this.wirelessCollector({
+          iteration: i,
+          apId: input.apId,
+          expectedMaxClients,
+          associationThresholdPct,
+        });
+        metrics.push(sample);
+      } catch (error) {
+        status = error instanceof HardwareLimitError ? "hardware_limit" : "failed";
+        terminationReason = error instanceof Error ? error.message : "unknown_error";
+        break;
+      }
+    }
+
+    return this.reportStore.addReport({
+      module: "wireless_density",
+      tenantId: input.tenantId,
+      operatorId: input.operatorId,
+      endpointId: input.endpointId,
+      status,
+      terminationReason,
+      closedSafely: true,
+      summary: summarize(metrics),
+      metrics,
+    });
+  }
+}

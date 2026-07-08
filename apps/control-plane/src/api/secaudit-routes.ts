@@ -4,8 +4,10 @@ import pg from "pg";
 
 import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
+import { InMemorySecAuditStressStore } from "../domain/secaudit-stress-store.js";
 import { generateSecAuditPDF } from "../services/pdf-generator.js";
 import { buildSecAuditReport, generateSecAuditCSV } from "../services/secaudit-report.js";
+import { SecAuditStressDiagnostics } from "../services/secaudit-stress-diagnostics.js";
 
 type CreatePlanBody = {
   tenantId: string;
@@ -85,6 +87,30 @@ type ClientFindingsBody = {
   moduleId: string;
   findings: Record<string, unknown>;
   evidence?: string[];
+};
+
+type EthernetStressBody = {
+  tenantId: string;
+  operatorId: string;
+  endpointId: string;
+  iterations?: number;
+  expectedBandwidthMbps?: number;
+  saturationThresholdPct?: number;
+};
+
+type WirelessDensityBody = {
+  tenantId: string;
+  operatorId: string;
+  endpointId: string;
+  apId: string;
+  iterations?: number;
+  expectedMaxClients?: number;
+  associationThresholdPct?: number;
+};
+
+type StressReportQuery = {
+  tenantId?: string;
+  module?: "ethernet_resilience" | "wireless_density";
 };
 
 type PreHandlerFn = (req: FastifyRequest, reply: FastifyReply, done: () => void) => void;
@@ -183,6 +209,8 @@ export function registerSecAuditRoutesWithDeps(
     auditStore?: InMemoryAuditLogStore;
     requireAdminKey?: PreHandlerFn;
     planStore?: InMemorySecAuditPlanStore;
+    stressStore?: InMemorySecAuditStressStore;
+    stressDiagnostics?: SecAuditStressDiagnostics;
     onCriticalDrift?: (payload: {
       planId: string;
       tenantId: string;
@@ -196,6 +224,8 @@ export function registerSecAuditRoutesWithDeps(
   const store = deps.planStore ?? new InMemorySecAuditPlanStore();
   const auditStore = deps.auditStore ?? new InMemoryAuditLogStore();
   const requireAdminKey = deps.requireAdminKey ?? ((_req, _reply, done) => done());
+  const stressStore = deps.stressStore ?? new InMemorySecAuditStressStore();
+  const stressDiagnostics = deps.stressDiagnostics ?? new SecAuditStressDiagnostics(stressStore);
   const onCriticalDrift = deps.onCriticalDrift;
   const batches = new Map<string, BatchRecord>();
   const schedules = new Map<string, ScheduleRecord>();
@@ -1113,6 +1143,112 @@ export function registerSecAuditRoutesWithDeps(
       schedules.delete(req.params.id);
       await deleteScheduleFromDb(req.params.id);
       return reply.code(200).send({ id: req.params.id, deleted: true });
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/stress/ethernet-resilience",
+    async (req: FastifyRequest<{ Body: EthernetStressBody }>, reply: FastifyReply) => {
+      const body = req.body;
+      if (!body || !isNonEmptyString(body.tenantId) || !isNonEmptyString(body.operatorId) || !isNonEmptyString(body.endpointId)) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId, operatorId and endpointId are required",
+        });
+      }
+
+      const report = await stressDiagnostics.runEthernetResilience({
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        endpointId: body.endpointId,
+        ...(typeof body.iterations === "number" ? { iterations: body.iterations } : {}),
+        ...(typeof body.expectedBandwidthMbps === "number" ? { expectedBandwidthMbps: body.expectedBandwidthMbps } : {}),
+        ...(typeof body.saturationThresholdPct === "number" ? { saturationThresholdPct: body.saturationThresholdPct } : {}),
+      });
+
+      auditStore.append({
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        endpointId: body.endpointId,
+        code: "resilience.exercise.planned",
+        details: {
+          scope: "secaudit_stress",
+          module: "ethernet_resilience",
+          reportId: report.id,
+          status: report.status,
+          closedSafely: report.closedSafely,
+          summary: report.summary,
+          terminationReason: report.terminationReason,
+        },
+      });
+
+      return reply.code(201).send(report);
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/stress/wireless-density",
+    async (req: FastifyRequest<{ Body: WirelessDensityBody }>, reply: FastifyReply) => {
+      const body = req.body;
+      if (!body || !isNonEmptyString(body.tenantId) || !isNonEmptyString(body.operatorId) || !isNonEmptyString(body.endpointId) || !isNonEmptyString(body.apId)) {
+        return reply.code(422).send({
+          code: "validation_error",
+          message: "tenantId, operatorId, endpointId and apId are required",
+        });
+      }
+
+      const report = await stressDiagnostics.runWirelessDensity({
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        endpointId: body.endpointId,
+        apId: body.apId,
+        ...(typeof body.iterations === "number" ? { iterations: body.iterations } : {}),
+        ...(typeof body.expectedMaxClients === "number" ? { expectedMaxClients: body.expectedMaxClients } : {}),
+        ...(typeof body.associationThresholdPct === "number" ? { associationThresholdPct: body.associationThresholdPct } : {}),
+      });
+
+      auditStore.append({
+        tenantId: body.tenantId,
+        operatorId: body.operatorId,
+        endpointId: body.endpointId,
+        code: "resilience.exercise.planned",
+        details: {
+          scope: "secaudit_stress",
+          module: "wireless_density",
+          apId: body.apId,
+          reportId: report.id,
+          status: report.status,
+          closedSafely: report.closedSafely,
+          summary: report.summary,
+          terminationReason: report.terminationReason,
+        },
+      });
+
+      return reply.code(201).send(report);
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/stress/reports",
+    async (req: FastifyRequest<{ Querystring: StressReportQuery }>, reply: FastifyReply) => {
+      const items = stressStore.listReports({
+        ...(isNonEmptyString(req.query.tenantId) ? { tenantId: req.query.tenantId } : {}),
+        ...(req.query.module === "ethernet_resilience" || req.query.module === "wireless_density"
+          ? { module: req.query.module }
+          : {}),
+      });
+      return reply.code(200).send({ items, count: items.length });
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/stress/reports/:id",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const report = stressStore.getById(req.params.id);
+      if (!report) {
+        return reply.code(404).send({ code: "not_found", message: "stress report not found" });
+      }
+      return reply.code(200).send(report);
     },
   );
 
