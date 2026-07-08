@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel } from "../domain/secaudit-plan-store.js";
+import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
 
 type CreatePlanBody = {
@@ -367,6 +367,17 @@ export function registerSecAuditRoutesWithDeps(
       };
 
       return reply.code(200).send(report);
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/plans/:id/compare",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const comparison = store.compare(req.params.id);
+      if (!comparison) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+      return reply.code(200).send(comparison);
     },
   );
 

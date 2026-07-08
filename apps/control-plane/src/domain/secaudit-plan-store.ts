@@ -36,11 +36,20 @@ export type SecAuditPlanRecord = {
   results: SecAuditModuleResult[];
   score?: number;
   severityBuckets?: SeverityBucket;
+  baselinePlanId?: string;
   createdAt: string;
   updatedAt: string;
 };
 
-export type CreateSecAuditPlanInput = Omit<SecAuditPlanRecord, "id" | "createdAt" | "updatedAt" | "status" | "results">;
+export type AuditComparison = {
+  current: { id: string; score: number | undefined; buckets: SeverityBucket | undefined };
+  baseline: { id: string; score: number | undefined; buckets: SeverityBucket | undefined } | null;
+  scoreDelta: number | null;
+  severityDelta: { critical: number; high: number; medium: number; low: number; info: number };
+  percentageImprovement: number | null;
+};
+
+export type CreateSecAuditPlanInput = Omit<SecAuditPlanRecord, "id" | "createdAt" | "updatedAt" | "status" | "results" | "baselinePlanId">;
 
 function calculateSeverityBuckets(results: SecAuditModuleResult[]): SeverityBucket {
   const buckets: SeverityBucket = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
@@ -69,6 +78,7 @@ export class InMemorySecAuditPlanStore {
   create(input: CreateSecAuditPlanInput): SecAuditPlanRecord {
     this.seq += 1;
     const now = new Date().toISOString();
+    const baseline = this.findPreviousCompleted(input.endpointId);
     const plan: SecAuditPlanRecord = {
       id: `secaudit_plan_${this.seq}`,
       tenantId: input.tenantId,
@@ -78,6 +88,7 @@ export class InMemorySecAuditPlanStore {
       targetOs: input.targetOs,
       executionLevel: input.executionLevel,
       modules: [...input.modules],
+      baselinePlanId: baseline?.id,
       status: "draft",
       results: input.modules.map((moduleId) => ({
         moduleId,
@@ -109,6 +120,47 @@ export class InMemorySecAuditPlanStore {
   }
 
   listByTenant(tenantId: string): SecAuditPlanRecord[] {
-    return Array.from(this.plans.values()).filter((x) => x.tenantId === tenantId);
+    const plans = Array.from(this.plans.values()).filter((x) => x.tenantId === tenantId);
+    plans.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return plans;
+  }
+
+  findPreviousCompleted(endpointId: string, excludeId?: string): SecAuditPlanRecord | undefined {
+    const completed = Array.from(this.plans.values())
+      .filter((p) => p.endpointId === endpointId && p.status === "completed" && p.id !== excludeId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return completed[0];
+  }
+
+  compare(planId: string): AuditComparison | null {
+    const current = this.getById(planId);
+    if (!current) return null;
+
+    const baseline = current.baselinePlanId ? this.getById(current.baselinePlanId) : this.findPreviousCompleted(current.endpointId, planId);
+
+    const currentBuckets = current.severityBuckets ?? { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+    const baselineBuckets = baseline?.severityBuckets ?? { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+
+    const scoreDelta = current.score !== undefined && baseline?.score !== undefined ? current.score - baseline.score : null;
+    const severityDelta = {
+      critical: currentBuckets.critical - baselineBuckets.critical,
+      high: currentBuckets.high - baselineBuckets.high,
+      medium: currentBuckets.medium - baselineBuckets.medium,
+      low: currentBuckets.low - baselineBuckets.low,
+      info: currentBuckets.info - baselineBuckets.info,
+    };
+
+    const percentageImprovement =
+      current.score !== undefined && baseline?.score !== undefined && baseline.score > 0
+        ? Math.round(((current.score - baseline.score) / baseline.score) * 100 * 10) / 10
+        : null;
+
+    return {
+      current: { id: current.id, score: current.score, buckets: currentBuckets },
+      baseline: baseline ? { id: baseline.id, score: baseline.score, buckets: baselineBuckets } : null,
+      scoreDelta,
+      severityDelta,
+      percentageImprovement,
+    };
   }
 }

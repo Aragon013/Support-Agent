@@ -182,4 +182,100 @@ describe("secaudit routes", () => {
 
     await app.close();
   });
+
+  it("compares current audit with baseline", async () => {
+    const app = buildApp();
+
+    // First audit (baseline)
+    const create1 = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-1",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["net.client-health"],
+      },
+    });
+
+    const plan1 = create1.json() as { id: string };
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan1.id}/run`,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan1.id}/client-findings`,
+      payload: {
+        moduleId: "net.client-health",
+        findings: { status: "ok", severity: "high" },
+        evidence: ["ping=31ms"],
+      },
+    });
+
+    // Fetch results to mark plan1 as completed
+    await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/plans/${plan1.id}/results`,
+    });
+
+    // Second audit (current)
+    const create2 = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-1",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["net.client-health"],
+      },
+    });
+
+    const plan2 = create2.json() as { id: string; baselinePlanId?: string };
+    expect(plan2.baselinePlanId).toBe(plan1.id);
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan2.id}/run`,
+    });
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan2.id}/client-findings`,
+      payload: {
+        moduleId: "net.client-health",
+        findings: { status: "ok", severity: "medium" },
+        evidence: ["ping=28ms"],
+      },
+    });
+
+    const compare = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/plans/${plan2.id}/compare`,
+    });
+
+    expect(compare.statusCode).toBe(200);
+    const body = compare.json() as {
+      current: { id: string; score: number | undefined };
+      baseline: { id: string } | null;
+      scoreDelta: number | null;
+      severityDelta: { high: number; medium: number };
+    };
+
+    expect(body.current.id).toBe(plan2.id);
+    expect(body.baseline?.id).toBe(plan1.id);
+    expect(body.scoreDelta).toBeDefined();
+    expect(body.severityDelta.high).toBe(-1);
+    expect(body.severityDelta.medium).toBe(1);
+
+    await app.close();
+  });
 });

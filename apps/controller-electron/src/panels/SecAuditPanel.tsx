@@ -11,6 +11,8 @@ import {
   Clock3,
   Filter,
   Download,
+  TrendingUp,
+  TrendingDown,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
@@ -47,6 +49,14 @@ type PlanResultsResponse = {
     clientRequired: number;
   };
   modules: PlanModuleResult[];
+};
+
+type AuditComparison = {
+  current: { id: string; score: number | undefined; buckets?: { critical: number; high: number; medium: number; low: number; info: number } };
+  baseline: { id: string; score: number | undefined; buckets?: { critical: number; high: number; medium: number; low: number; info: number } } | null;
+  scoreDelta: number | null;
+  severityDelta: { critical: number; high: number; medium: number; low: number; info: number };
+  percentageImprovement: number | null;
 };
 
 type AuditOrigin = "host" | "host_network" | "client_network";
@@ -276,6 +286,7 @@ export function SecAuditPanel() {
   const [summary, setSummary] = useState<PlanResultsResponse["summary"] | null>(null);
   const [score, setScore] = useState<number | null>(null);
   const [severityBuckets, setSeverityBuckets] = useState<PlanResultsResponse["severityBuckets"] | null>(null);
+  const [comparison, setComparison] = useState<AuditComparison | null>(null);
 
   const packageMeta = useMemo(
     () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
@@ -419,6 +430,17 @@ export function SecAuditPanel() {
     }
   };
 
+  const loadComparison = async (planId: string) => {
+    try {
+      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${planId}/compare`));
+      if (!response.ok) return;
+      const data = (await response.json()) as AuditComparison;
+      setComparison(data);
+    } catch {
+      setComparison(null);
+    }
+  };
+
   const runAudit = async () => {
     if (selectedModules.length === 0) {
       setRunError("Select at least one module before running the audit.");
@@ -482,6 +504,10 @@ export function SecAuditPanel() {
     } catch (error) {
       setRunState("error");
       setRunError(error instanceof Error ? error.message : "Audit execution failed");
+    }
+
+    if (activePlanId) {
+      await loadComparison(activePlanId);
     }
   };
 
@@ -719,6 +745,52 @@ export function SecAuditPanel() {
                 )}
               </div>
             ) : null}
+
+            {comparison && comparison.baseline && (
+              <div className="mb-3 rounded-lg border border-info/30 bg-info/10 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-900">Baseline Comparison</p>
+                  {comparison.scoreDelta !== null && (
+                    <div className="flex items-center gap-1">
+                      {comparison.scoreDelta > 0 ? (
+                        <TrendingUp className="h-4 w-4 text-success" />
+                      ) : comparison.scoreDelta < 0 ? (
+                        <TrendingDown className="h-4 w-4 text-danger" />
+                      ) : null}
+                      <span className={cn(
+                        "text-sm font-semibold rounded px-2 py-1",
+                        comparison.scoreDelta > 0 ? "bg-success/20 text-success" : comparison.scoreDelta < 0 ? "bg-danger/20 text-danger" : "bg-slate-200 text-slate-600"
+                      )}>
+                        {comparison.scoreDelta > 0 ? "+" : ""}{comparison.scoreDelta} · {comparison.percentageImprovement}%
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-[10px]">
+                  {comparison.severityDelta.critical !== 0 && (
+                    <div className={cn("rounded px-2 py-1", comparison.severityDelta.critical > 0 ? "bg-danger/20 text-danger" : "bg-success/20 text-success")}>
+                      🔴 {comparison.severityDelta.critical > 0 ? "+" : ""}{comparison.severityDelta.critical}
+                    </div>
+                  )}
+                  {comparison.severityDelta.high !== 0 && (
+                    <div className={cn("rounded px-2 py-1", comparison.severityDelta.high > 0 ? "bg-danger/20 text-danger" : "bg-success/20 text-success")}>
+                      🟠 {comparison.severityDelta.high > 0 ? "+" : ""}{comparison.severityDelta.high}
+                    </div>
+                  )}
+                  {comparison.severityDelta.medium !== 0 && (
+                    <div className={cn("rounded px-2 py-1", comparison.severityDelta.medium > 0 ? "bg-warn/20 text-warn" : "bg-success/20 text-success")}>
+                      🟡 {comparison.severityDelta.medium > 0 ? "+" : ""}{comparison.severityDelta.medium}
+                    </div>
+                  )}
+                  {comparison.severityDelta.low !== 0 && (
+                    <div className={cn("rounded px-2 py-1", comparison.severityDelta.low > 0 ? "bg-brand/20 text-brand" : "bg-success/20 text-success")}>
+                      🔵 {comparison.severityDelta.low > 0 ? "+" : ""}{comparison.severityDelta.low}
+                    </div>
+                  )}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-600">vs {comparison.baseline.id}</p>
+              </div>
+            )}
 
             {activePlanId && runState === "done" && (
               <button
