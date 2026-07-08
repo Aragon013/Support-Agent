@@ -184,6 +184,10 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, "../dist-renderer/index.html"));
   }
 
+  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.error(`[renderer] failed to load ${url} — ${code} ${desc}`);
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });

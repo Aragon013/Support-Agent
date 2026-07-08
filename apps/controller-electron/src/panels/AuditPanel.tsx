@@ -13,7 +13,7 @@ const AuditRecordSchema = z.object({
   tenantId: z.string(),
   operatorId: z.string(),
   code: z.string(),
-  details: z.record(z.unknown()),
+  details: z.record(z.string(), z.unknown()),
   endpointId: z.string().optional(),
   jobId: z.string().optional(),
 });

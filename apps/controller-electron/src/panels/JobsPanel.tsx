@@ -43,24 +43,9 @@ export function JobsPanel() {
   const [loading, setLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const fetchJobs = async () => {
+  const reconnectWebSocket = () => {
     setLoading(true);
-    try {
-      const res = await fetch(apiUrl("/api/v1/commands/jobs"));
-      if (res.ok) {
-        const body = await res.json() as { items: Job[] };
-        setJobs(body.items ?? []);
-      }
-    } catch {
-      // server may not be running in dev preview
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void fetchJobs();
-
+    if (wsRef.current) wsRef.current.close();
     const ws = new WebSocket(
       `${BACKEND_URL.replace(/^http/, "ws")}/api/v1/commands/events/ws?tenantId=tenant-1`,
     );
@@ -83,8 +68,15 @@ export function JobsPanel() {
       }
     };
 
+    ws.onopen = () => setLoading(false);
+    ws.onerror = () => setLoading(false);
+  };
+
+  useEffect(() => {
+    reconnectWebSocket();
+
     return () => {
-      ws.close();
+      wsRef.current?.close();
     };
   }, []);
 
@@ -95,7 +87,7 @@ export function JobsPanel() {
           <h2 className="text-lg font-semibold text-slate-900">Command Queue</h2>
           <p className="mt-0.5 text-sm text-slate-600">Track command progress and outcomes.</p>
         </div>
-        <button onClick={fetchJobs} className="tv-button-soft px-3 py-1.5 text-xs">
+        <button onClick={reconnectWebSocket} className="tv-button-soft px-3 py-1.5 text-xs">
           <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
           Refresh Queue
         </button>
