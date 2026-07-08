@@ -2,6 +2,16 @@ export type SecAuditPlanStatus = "draft" | "running" | "partial" | "completed" |
 
 export type SecAuditExecutionLevel = "safe" | "safe_light" | "deep";
 
+export type Severity = "critical" | "high" | "medium" | "low" | "info";
+
+export type SeverityBucket = {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+};
+
 export type SecAuditModuleResult = {
   moduleId: string;
   origin: "host" | "host_network" | "client_network";
@@ -24,11 +34,33 @@ export type SecAuditPlanRecord = {
   modules: string[];
   status: SecAuditPlanStatus;
   results: SecAuditModuleResult[];
+  score?: number;
+  severityBuckets?: SeverityBucket;
   createdAt: string;
   updatedAt: string;
 };
 
 export type CreateSecAuditPlanInput = Omit<SecAuditPlanRecord, "id" | "createdAt" | "updatedAt" | "status" | "results">;
+
+function calculateSeverityBuckets(results: SecAuditModuleResult[]): SeverityBucket {
+  const buckets: SeverityBucket = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const result of results) {
+    if (result.status !== "completed" || !result.findings) continue;
+    const sev = (result.findings as { severity?: Severity }).severity ?? "info";
+    if (sev in buckets) {
+      buckets[sev as Severity] += 1;
+    }
+  }
+  return buckets;
+}
+
+function calculateScore(results: SecAuditModuleResult[]): number {
+  const buckets = calculateSeverityBuckets(results);
+  const total = Object.values(buckets).reduce((a, b) => a + b, 0);
+  if (total === 0) return 100;
+  const weighted = buckets.critical * 4 + buckets.high * 2 + buckets.medium * 1;
+  return Math.max(0, Math.min(100, Math.floor(100 - (weighted / total) * 25)));
+}
 
 export class InMemorySecAuditPlanStore {
   private plans = new Map<string, SecAuditPlanRecord>();
@@ -70,6 +102,8 @@ export class InMemorySecAuditPlanStore {
     if (!found) return undefined;
     updater(found);
     found.updatedAt = new Date().toISOString();
+    found.severityBuckets = calculateSeverityBuckets(found.results);
+    found.score = calculateScore(found.results);
     this.plans.set(id, found);
     return found;
   }

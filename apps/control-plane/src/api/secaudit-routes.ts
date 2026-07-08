@@ -302,6 +302,8 @@ export function registerSecAuditRoutesWithDeps(
       return reply.code(200).send({
         id: latest.id,
         status: latest.status,
+        score: latest.score,
+        severityBuckets: latest.severityBuckets,
         summary: {
           total: latest.results.length,
           completed: latest.results.filter((x) => x.status === "completed").length,

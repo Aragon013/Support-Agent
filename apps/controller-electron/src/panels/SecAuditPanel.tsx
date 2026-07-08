@@ -36,6 +36,8 @@ type PlanRunResponse = {
 type PlanResultsResponse = {
   id: string;
   status: string;
+  score?: number;
+  severityBuckets?: { critical: number; high: number; medium: number; low: number; info: number };
   summary: {
     total: number;
     completed: number;
@@ -271,6 +273,8 @@ export function SecAuditPanel() {
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [results, setResults] = useState<PlanModuleResult[]>([]);
   const [summary, setSummary] = useState<PlanResultsResponse["summary"] | null>(null);
+  const [score, setScore] = useState<number | null>(null);
+  const [severityBuckets, setSeverityBuckets] = useState<PlanResultsResponse["severityBuckets"] | null>(null);
 
   const packageMeta = useMemo(
     () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
@@ -384,6 +388,8 @@ export function SecAuditPanel() {
     const data = (await response.json()) as PlanResultsResponse;
     setResults(data.modules);
     setSummary(data.summary);
+    setScore(data.score ?? null);
+    setSeverityBuckets(data.severityBuckets ?? null);
     return data;
   };
 
@@ -658,11 +664,33 @@ export function SecAuditPanel() {
               <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px] text-slate-600">{runState}</span>
             </div>
             {summary ? (
-              <div className="mb-2 grid grid-cols-2 gap-2 text-[11px] text-slate-700">
-                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Total: {summary.total}</div>
-                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Completed: {summary.completed}</div>
-                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Failed: {summary.failed}</div>
-                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Pending: {summary.running + summary.clientRequired}</div>
+              <div className="mb-4">
+                <div className="mb-3 grid grid-cols-2 gap-2 text-[11px] text-slate-700">
+                  <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Total: {summary.total}</div>
+                  <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Completed: {summary.completed}</div>
+                  <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Failed: {summary.failed}</div>
+                  <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Pending: {summary.running + summary.clientRequired}</div>
+                </div>
+                {score !== null && severityBuckets && (
+                  <div className="rounded-lg border border-brand/30 bg-brand/10 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-xs font-semibold text-slate-900">Security Score</p>
+                      <p className={cn(
+                        "text-lg font-bold rounded-full px-3 py-1",
+                        score >= 80 ? "bg-success/20 text-success" : score >= 60 ? "bg-warn/20 text-warn" : "bg-danger/20 text-danger"
+                      )}>
+                        {score}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1 text-[10px]">
+                      {severityBuckets.critical > 0 && <div className="rounded bg-danger/20 px-2 py-1 text-center text-danger font-semibold">🔴 {severityBuckets.critical}</div>}
+                      {severityBuckets.high > 0 && <div className="rounded bg-danger/20 px-2 py-1 text-center text-danger font-semibold">🟠 {severityBuckets.high}</div>}
+                      {severityBuckets.medium > 0 && <div className="rounded bg-warn/20 px-2 py-1 text-center text-warn font-semibold">🟡 {severityBuckets.medium}</div>}
+                      {severityBuckets.low > 0 && <div className="rounded bg-brand/20 px-2 py-1 text-center text-brand font-semibold">🔵 {severityBuckets.low}</div>}
+                      {severityBuckets.info > 0 && <div className="rounded bg-slate-200 px-2 py-1 text-center text-slate-600 font-semibold">ⓘ {severityBuckets.info}</div>}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : null}
 
