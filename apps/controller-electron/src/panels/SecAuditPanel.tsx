@@ -12,6 +12,39 @@ import {
   Filter,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { apiUrl } from "@/lib/backend-url";
+
+type RunState = "idle" | "creating" | "running" | "polling" | "done" | "error";
+
+type PlanModuleResult = {
+  moduleId: string;
+  origin: AuditOrigin;
+  status: "pending" | "running" | "completed" | "failed" | "client_required";
+  commandJobId?: string;
+  findings?: Record<string, unknown>;
+  evidence?: string[];
+  error?: string;
+  updatedAt: string;
+};
+
+type PlanRunResponse = {
+  id: string;
+  status: string;
+  modules: PlanModuleResult[];
+};
+
+type PlanResultsResponse = {
+  id: string;
+  status: string;
+  summary: {
+    total: number;
+    completed: number;
+    failed: number;
+    running: number;
+    clientRequired: number;
+  };
+  modules: PlanModuleResult[];
+};
 
 type AuditOrigin = "host" | "host_network" | "client_network";
 type OSType = "windows" | "linux" | "macos" | "all";
@@ -233,6 +266,11 @@ export function SecAuditPanel() {
   const [targetOs, setTargetOs] = useState<OSType>("windows");
   const [originFilter, setOriginFilter] = useState<AuditOrigin | "all">("all");
   const [customSelected, setCustomSelected] = useState<Set<string>>(new Set(PACKAGES.find((x) => x.id === "quick")?.includes ?? []));
+  const [runState, setRunState] = useState<RunState>("idle");
+  const [runError, setRunError] = useState<string | null>(null);
+  const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [results, setResults] = useState<PlanModuleResult[]>([]);
+  const [summary, setSummary] = useState<PlanResultsResponse["summary"] | null>(null);
 
   const packageMeta = useMemo(
     () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
@@ -293,6 +331,126 @@ export function SecAuditPanel() {
       else next.add(id);
       return next;
     });
+  };
+
+  const submitClientFindings = async (
+    planId: string,
+    moduleId: string,
+    findings: Record<string, unknown>,
+    evidence: string[],
+  ) => {
+    await fetch(apiUrl(`/api/v1/secaudit/plans/${planId}/client-findings`), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        moduleId,
+        findings,
+        evidence,
+      }),
+    });
+  };
+
+  const runClientModules = async (planId: string, modules: PlanModuleResult[]) => {
+    const clientModules = modules.filter((m) => m.origin === "client_network");
+    for (const module of clientModules) {
+      const runner = window.electronAPI?.runClientSecAudit;
+      if (!runner) {
+        await submitClientFindings(planId, module.moduleId, { status: "error", reason: "electron_api_unavailable" }, []);
+        continue;
+      }
+
+      const response = await runner({ moduleId: module.moduleId });
+      await submitClientFindings(
+        planId,
+        module.moduleId,
+        {
+          ...response.findings,
+          ok: response.ok,
+          error: response.error,
+        },
+        response.evidence,
+      );
+    }
+  };
+
+  const refreshResults = async (planId: string): Promise<PlanResultsResponse> => {
+    const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${planId}/results`));
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `results_http_${response.status}`);
+    }
+    const data = (await response.json()) as PlanResultsResponse;
+    setResults(data.modules);
+    setSummary(data.summary);
+    return data;
+  };
+
+  const runAudit = async () => {
+    if (selectedModules.length === 0) {
+      setRunError("Select at least one module before running the audit.");
+      return;
+    }
+
+    setRunError(null);
+    setRunState("creating");
+
+    try {
+      const createResponse = await fetch(apiUrl("/api/v1/secaudit/plans"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          tenantId: "default",
+          endpointId: "endpoint-dev-01",
+          operatorId: "operator-ui",
+          packageId: selectedPackage,
+          targetOs,
+          executionLevel,
+          modules: selectedModules.map((m) => m.id),
+        }),
+      });
+
+      if (!createResponse.ok) {
+        const text = await createResponse.text();
+        throw new Error(text || `create_http_${createResponse.status}`);
+      }
+
+      const plan = (await createResponse.json()) as { id: string };
+      setActivePlanId(plan.id);
+
+      setRunState("running");
+      const runResponse = await fetch(apiUrl(`/api/v1/secaudit/plans/${plan.id}/run`), { method: "POST" });
+      if (!runResponse.ok) {
+        const text = await runResponse.text();
+        throw new Error(text || `run_http_${runResponse.status}`);
+      }
+
+      const runData = (await runResponse.json()) as PlanRunResponse;
+      setResults(runData.modules);
+
+      await runClientModules(plan.id, runData.modules);
+
+      setRunState("polling");
+      const started = Date.now();
+      const timeoutMs = 15000;
+
+      while (Date.now() - started < timeoutMs) {
+        const snapshot = await refreshResults(plan.id);
+        if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "partial") {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+
+      await refreshResults(plan.id);
+      setRunState("done");
+    } catch (error) {
+      setRunState("error");
+      setRunError(error instanceof Error ? error.message : "Audit execution failed");
+    }
   };
 
   return (
@@ -480,6 +638,61 @@ export function SecAuditPanel() {
               <summary className="cursor-pointer text-xs font-semibold text-slate-700">Plan JSON (for backend runner mapping)</summary>
               <pre className="mt-2 max-h-52 overflow-auto rounded bg-slate-950 p-2 text-[11px] text-slate-200">{planJson}</pre>
             </details>
+
+            <div className="mt-3 space-y-2">
+              <button
+                onClick={runAudit}
+                disabled={runState === "creating" || runState === "running" || runState === "polling"}
+                className="w-full rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runState === "creating" ? "Creating Plan..." : runState === "running" ? "Dispatching Modules..." : runState === "polling" ? "Collecting Results..." : "Run Audit"}
+              </button>
+              {activePlanId ? <p className="text-[11px] text-slate-600">Plan: {activePlanId}</p> : null}
+              {runError ? <p className="text-xs text-danger">{runError}</p> : null}
+            </div>
+          </div>
+
+          <div className="tv-panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Execution Results</h3>
+              <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px] text-slate-600">{runState}</span>
+            </div>
+            {summary ? (
+              <div className="mb-2 grid grid-cols-2 gap-2 text-[11px] text-slate-700">
+                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Total: {summary.total}</div>
+                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Completed: {summary.completed}</div>
+                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Failed: {summary.failed}</div>
+                <div className="rounded border border-blue-100 bg-blue-50/60 px-2 py-1">Pending: {summary.running + summary.clientRequired}</div>
+              </div>
+            ) : null}
+
+            <div className="max-h-56 space-y-2 overflow-auto">
+              {results.length === 0 ? (
+                <p className="text-xs text-slate-500">Run an audit to populate module outcomes.</p>
+              ) : (
+                results.map((result) => (
+                  <div key={result.moduleId} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-900">{result.moduleId}</p>
+                      <span className={cn(
+                        "rounded-full border px-2 py-0.5 text-[10px]",
+                        result.status === "completed"
+                          ? "border-success/30 bg-success/10 text-success"
+                          : result.status === "failed"
+                            ? "border-danger/30 bg-danger/10 text-danger"
+                            : "border-warn/30 bg-warn/10 text-warn",
+                      )}>
+                        {result.status}
+                      </span>
+                    </div>
+                    {result.error ? <p className="mt-1 text-[11px] text-danger">{result.error}</p> : null}
+                    {result.evidence?.length ? (
+                      <p className="mt-1 line-clamp-2 text-[11px] text-slate-600">{result.evidence.join(" · ")}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </section>
       </div>

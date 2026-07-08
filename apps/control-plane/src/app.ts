@@ -4,6 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 
 import { registerCommandRoutesWithDeps } from "./api/command-routes.js";
 import { registerSessionRoutesWithDeps } from "./api/session-routes.js";
+import { registerSecAuditRoutesWithDeps } from "./api/secaudit-routes.js";
 import { InMemoryAuditLogStore } from "./domain/audit-log-store.js";
 
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY ?? "dev-insecure-key-change-in-prod";
@@ -30,6 +31,7 @@ export function buildApp(): FastifyInstance {
   app.after(() => {
     registerCommandRoutesWithDeps(app, { auditStore, requireAdminKey });
     registerSessionRoutesWithDeps(app, { auditStore, requireAdminKey });
+    registerSecAuditRoutesWithDeps(app, { auditStore, requireAdminKey });
   });
 
   app.get("/health", async () => {

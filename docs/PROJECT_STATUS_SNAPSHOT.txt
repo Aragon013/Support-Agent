@@ -166,3 +166,62 @@ FASE DE EJECUCION RECOMENDADA
 3) Client audit runner (Electron main):
 	- Network checks locales via IPC.
 4) Reportes + scoring + baseline comparativo.
+
+SECAUDIT - AVANCE FASE 2 (2026-07-08)
+- Implementado backend SecAudit inicial en control-plane (in-memory):
+	- POST /api/v1/secaudit/plans
+	- POST /api/v1/secaudit/plans/:id/run
+	- POST /api/v1/secaudit/plans/:id/client-findings
+	- GET /api/v1/secaudit/plans/:id
+	- GET /api/v1/secaudit/plans/:id/results
+	- GET /api/v1/secaudit/plans?tenantId=... (admin key)
+- Nuevo store:
+	- apps/control-plane/src/domain/secaudit-plan-store.ts
+	- Estado por modulo: pending/running/completed/failed/client_required.
+- Mapping inicial modulo -> command catalog job:
+	- host.os-posture -> diagnostic.system.info
+	- host.firewall-edr -> security.firewall.status
+	- host.identity-admins -> diagnostic.system.info
+	- host.surface-ports -> diagnostic.system.info
+	- net.host-segment -> security.firewall.status
+	- net.client-health -> client_required (resuelto por IPC cliente)
+- Polling de resultados backend:
+	- Consulta /commands/jobs/:id y /channel-messages para enriquecer evidencia por modulo.
+
+INTEGRACION CLIENTE LOCAL (ELECTRON IPC)
+- Electron main:
+	- Nuevo handler IPC: secaudit:client-run.
+	- Runner seguro para net.client-health en Windows con PowerShell:
+		- Test-Connection
+		- Get-NetRoute
+		- Get-DnsClientServerAddress
+	- Respuesta normalizada: ok/findings/evidence/error.
+- Electron preload:
+	- Expuesto runClientSecAudit(payload).
+- Tipado global de window.electronAPI actualizado.
+
+SECAUDIT PANEL (UI) - EJECUCION END-TO-END
+- SecAuditPanel ahora ejecuta flujo real:
+	1) Crea plan en backend.
+	2) Ejecuta run del plan.
+	3) Ejecuta modulos client_network por IPC local.
+	4) Sube findings de cliente al backend.
+	5) Hace polling a /results y muestra resumen + resultados por modulo.
+- Estados de ejecucion visibles:
+	- idle, creating, running, polling, done, error.
+
+TESTS Y VALIDACION
+- Nuevo test backend:
+	- apps/control-plane/src/api/secaudit-routes.test.ts (3 casos).
+- Resultado tests control-plane:
+	- 14 archivos, 90 tests OK.
+- Resultado tests controller-electron:
+	- 2 archivos, 5 tests OK.
+- Build controller-electron:
+	- OK (renderer + electron).
+
+NOTA TECNICA IMPORTANTE
+- El build de control-plane sigue fallando por errores preexistentes NO introducidos en esta fase:
+	- overload typing con routes que usan preHandler en command-routes/session-routes
+	- audit event codes fuera del union en session-routes
+- SecAudit nuevo no reporta errores de TypeScript tras ajustes.

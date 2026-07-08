@@ -7,6 +7,13 @@ declare global {
       minimizeWindow: () => void;
       maximizeWindow: () => void;
       closeWindow: () => void;
+      runClientSecAudit?: (payload: { moduleId: string; targetHost?: string }) => Promise<{
+        moduleId: string;
+        ok: boolean;
+        findings: Record<string, unknown>;
+        evidence: string[];
+        error?: string;
+      }>;
     };
   }
 }
