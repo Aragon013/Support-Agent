@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/cn";
 import { resolveInstallProfile, type InstallProfile } from "./install-profile";
 import { mapErrorMessage } from "./error-messages";
+import { apiUrl } from "@/lib/backend-url";
 
 type CommandRisk = "low" | "medium" | "high";
 
@@ -163,7 +164,8 @@ type SuggestedAction = {
   tone: "recommended" | "follow_up" | "escalation";
 };
 
-const CATALOG: CommandCatalogItem[] = [
+// Fallback catalog mientras se carga desde API o si falla el fetch
+const CATALOG_FALLBACK: CommandCatalogItem[] = [
   {
     id: "diagnostic.system.info",
     label: "System Info",
@@ -200,6 +202,43 @@ const CATALOG: CommandCatalogItem[] = [
     preview: "Escalation path for stubborn network problems",
   },
 ];
+
+/** Convierte un catalog item del backend al tipo local (normaliza campos) */
+function normalizeCatalogItem(item: Record<string, unknown>): CommandCatalogItem | null {
+  if (typeof item.id !== "string" || typeof item.name !== "string") return null;
+
+  const riskMap: Record<string, CommandRisk> = {
+    low: "low",
+    medium: "medium",
+    high: "high",
+    critical: "high",
+  };
+  const categoryMap: Record<string, CommandCatalogItem["category"]> = {
+    "diagnostic.system.info": "triage",
+    "security.firewall.status": "triage",
+    "maintenance.service.restart": "remediation",
+    "maintenance.network.reset": "escalation",
+  };
+
+  const paramFields = (item.paramsSchema as Record<string, unknown> | undefined)?.fields ?? {};
+  const params: CommandCatalogItem["params"] = Object.entries(
+    paramFields as Record<string, { type?: string; enumValues?: string[]; required?: boolean }>,
+  ).map(([key, schema]) => ({
+    key,
+    type: (schema.enumValues?.length ?? 0) > 0 ? "select" : "text",
+    options: schema.enumValues as string[] | undefined,
+    required: schema.required ?? false,
+  }));
+
+  return {
+    id: item.id as string,
+    label: item.name as string,
+    description: (item.description as string | undefined) ?? "",
+    risk: riskMap[item.riskLevel as string] ?? "low",
+    category: categoryMap[item.id as string] ?? "triage",
+    params: params.length > 0 ? params : undefined,
+  };
+}
 
 const COMMAND_FILTERS = ["all", "triage", "remediation", "escalation"] as const;
 
@@ -416,7 +455,9 @@ export function SupportPanel() {
   const [tenantId, setTenantId] = useState("");
   const [operatorId, setOperatorId] = useState("");
   const [target, setTarget] = useState("");
-  const [selectedCommand, setSelectedCommand] = useState(CATALOG[0].id);
+  const [catalog, setCatalog] = useState<CommandCatalogItem[]>(CATALOG_FALLBACK);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [selectedCommand, setSelectedCommand] = useState(CATALOG_FALLBACK[0].id);
   const [params, setParams] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
@@ -434,19 +475,46 @@ export function SupportPanel() {
   const [supportSession, setSupportSession] = useState<SessionHandoffRecord | null>(null);
   const [sessionTimeline, setSessionTimeline] = useState<SessionStatusTick[]>([]);
 
+  // Cargar catalog desde API al montar
+  useEffect(() => {
+    let cancelled = false;
+    const loadCatalog = async () => {
+      setCatalogLoading(true);
+      try {
+        const res = await fetch(apiUrl("/api/v1/commands/catalog"));
+        if (!res.ok) throw new Error(`catalog_http_${res.status}`);
+        const body = await res.json() as { items: Record<string, unknown>[] };
+        const normalized = body.items.flatMap((item) => {
+          const parsed = normalizeCatalogItem(item);
+          return parsed ? [parsed] : [];
+        });
+        if (!cancelled && normalized.length > 0) {
+          setCatalog(normalized);
+          setSelectedCommand((prev) => normalized.some((c) => c.id === prev) ? prev : normalized[0].id);
+        }
+      } catch {
+        // Keep fallback catalog on error
+      } finally {
+        if (!cancelled) setCatalogLoading(false);
+      }
+    };
+    void loadCatalog();
+    return () => { cancelled = true; };
+  }, []);
+
   const command = useMemo(
-    () => CATALOG.find((item) => item.id === selectedCommand) ?? CATALOG[0],
-    [selectedCommand],
+    () => catalog.find((item) => item.id === selectedCommand) ?? catalog[0],
+    [catalog, selectedCommand],
   );
-  const currentParams = command.params ?? [];
+  const currentParams = command?.params ?? [];
 
   const selectedPermission = useMemo(
-    () => commandPermission(installProfile, command.id),
-    [installProfile, command.id],
+    () => commandPermission(installProfile, command?.id ?? ""),
+    [installProfile, command],
   );
 
   const visibleCatalog = useMemo(
-    () => CATALOG.filter(
+    () => catalog.filter(
       (item) => (
         (catalogFilter === "all" || item.category === catalogFilter) &&
         (searchQuery === "" || 
@@ -465,7 +533,7 @@ export function SupportPanel() {
     [currentParams, params],
   );
 
-  const canExecuteSelected = hasTarget && selectedPermission.allowed && !requiredParamsMissing && !loading;
+  const canExecuteSelected = hasTarget && selectedPermission.allowed && !requiredParamsMissing && !loading && !catalogLoading;
   const suggestedActions = useMemo(
     () => buildSuggestedActions(probeInfo, recentJobs, activeJob, jobTranscript, error),
     [probeInfo, recentJobs, activeJob, jobTranscript, error],
@@ -505,7 +573,7 @@ export function SupportPanel() {
     setError(null);
 
     try {
-      const res = await fetch("http://localhost:3000/api/v1/sessions", {
+      const res = await fetch(apiUrl("/api/v1/sessions"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -590,7 +658,7 @@ export function SupportPanel() {
 
       try {
         const res = await fetch(
-          `http://localhost:3000/api/v1/endpoints/${encodeURIComponent(endpointId)}/session-policy`,
+          apiUrl(`/api/v1/endpoints/${encodeURIComponent(endpointId)}/session-policy`),
           { signal: controller.signal },
         );
         if (!res.ok) {
@@ -636,7 +704,7 @@ export function SupportPanel() {
     const timer = setInterval(() => {
       void (async () => {
         try {
-          const res = await fetch(`http://localhost:3000/api/v1/sessions/${supportSession.sessionId}`);
+          const res = await fetch(apiUrl(`/api/v1/sessions/${supportSession.sessionId}`));
           if (!res.ok) {
             return;
           }
@@ -704,7 +772,7 @@ export function SupportPanel() {
     setActiveJob(null);
 
     try {
-      const response = await fetch("http://localhost:3000/api/v1/commands/jobs", {
+      const response = await fetch(apiUrl("/api/v1/commands/jobs"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -773,7 +841,7 @@ export function SupportPanel() {
     const terminalStates = new Set<JobStatus>(["completed", "failed", "cancelled", "blocked"]);
 
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      const jobResponse = await fetch(`http://localhost:3000/api/v1/commands/jobs/${jobId}`);
+      const jobResponse = await fetch(apiUrl(`/api/v1/commands/jobs/${jobId}`));
       if (!jobResponse.ok) {
         throw new Error(`job_poll_failed_${jobResponse.status}`);
       }
@@ -788,7 +856,7 @@ export function SupportPanel() {
 
       if (terminalStates.has(job.status)) {
         const transcriptResponse = await fetch(
-          `http://localhost:3000/api/v1/commands/jobs/${jobId}/channel-messages`,
+          apiUrl(`/api/v1/commands/jobs/${jobId}/channel-messages`),
         );
         if (transcriptResponse.ok) {
           const transcriptBody = await transcriptResponse.json() as { items: JobEnvelope[] };
