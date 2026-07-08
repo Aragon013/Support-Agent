@@ -255,21 +255,18 @@ export function registerSessionRoutesWithDeps(
    * POST /api/v1/endpoints — Admin only (x-api-key requerido)
    * Register or update an endpoint in the registry.
    */
-  app.post(
+  app.post<{
+    Body: {
+      endpointId: string;
+      installProfile?: EndpointInstallProfile;
+      licenseStatus?: "active" | "inactive";
+      unattendedEnabled?: boolean;
+      maxActiveControlSessions?: number;
+    };
+  }>(
     "/api/v1/endpoints",
     { preHandler: requireAdminKey },
-    async (
-      req: FastifyRequest<{
-        Body: {
-          endpointId: string;
-          installProfile?: EndpointInstallProfile;
-          licenseStatus?: "active" | "inactive";
-          unattendedEnabled?: boolean;
-          maxActiveControlSessions?: number;
-        };
-      }>,
-      reply: FastifyReply,
-    ) => {
+    async (req, reply) => {
       const body = req.body;
 
       if (!isNonEmptyString(body?.endpointId)) {

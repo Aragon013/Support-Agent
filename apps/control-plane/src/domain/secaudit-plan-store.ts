@@ -77,7 +77,7 @@ function calculateScore(results: SecAuditModuleResult[]): number {
 export class InMemorySecAuditPlanStore {
   private plans = new Map<string, SecAuditPlanRecord>();
   private seq = 0;
-  private readonly persistenceFilePath?: string;
+  private readonly persistenceFilePath: string | undefined;
 
   constructor(persistenceFilePath?: string) {
     this.persistenceFilePath = persistenceFilePath;

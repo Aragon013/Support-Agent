@@ -414,6 +414,18 @@ describe("secaudit routes", () => {
     const batchGet = await app.inject({ method: "GET", url: `/api/v1/secaudit/batches/${batch.id}` });
     expect(batchGet.statusCode).toBe(200);
 
+    const batchList = await app.inject({ method: "GET", url: "/api/v1/secaudit/batches?tenantId=tenant-ops" });
+    expect(batchList.statusCode).toBe(200);
+    const batchListBody = batchList.json() as { count: number; items: Array<{ id: string }> };
+    expect(batchListBody.count).toBeGreaterThan(0);
+    expect(batchListBody.items.some((item) => item.id === batch.id)).toBe(true);
+
+    const batchCancel = await app.inject({ method: "POST", url: `/api/v1/secaudit/batches/${batch.id}/cancel` });
+    expect(batchCancel.statusCode).toBe(200);
+    const batchCancelBody = batchCancel.json() as { status: string; cancelled: boolean };
+    expect(batchCancelBody.cancelled).toBe(true);
+    expect(batchCancelBody.status).toBe("cancelled");
+
     const schedCreate = await app.inject({
       method: "POST",
       url: "/api/v1/secaudit/schedules",

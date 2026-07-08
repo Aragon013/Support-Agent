@@ -77,6 +77,41 @@ type AuditReport = {
   remediations: AuditRemediation[];
 };
 
+type BatchStatus = "running" | "completed" | "partial" | "failed" | "cancelled";
+
+type BatchSummary = {
+  total: number;
+  completed: number;
+  failed: number;
+  partial: number;
+  running: number;
+};
+
+type SecAuditBatch = {
+  id: string;
+  tenantId: string;
+  operatorId: string;
+  endpointIds: string[];
+  planIds: string[];
+  createdAt: string;
+  status: BatchStatus;
+  summary?: BatchSummary;
+};
+
+type SecAuditSchedule = {
+  id: string;
+  tenantId: string;
+  operatorId: string;
+  endpointId: string;
+  packageId: string;
+  targetOs: OSType;
+  executionLevel: AuditLevel;
+  modules: string[];
+  intervalMinutes: number;
+  nextRunAt: string;
+  createdAt: string;
+};
+
 type AuditOrigin = "host" | "host_network" | "client_network";
 type OSType = "windows" | "linux" | "macos" | "all";
 type AuditLevel = "safe" | "safe_light" | "deep";
@@ -496,6 +531,13 @@ export function SecAuditPanel() {
   const [severityBuckets, setSeverityBuckets] = useState<PlanResultsResponse["severityBuckets"] | null>(null);
   const [comparison, setComparison] = useState<AuditComparison | null>(null);
   const [report, setReport] = useState<AuditReport | null>(null);
+  const [batchEndpointIds, setBatchEndpointIds] = useState<string>("endpoint-dev-01, endpoint-dev-02");
+  const [batchItems, setBatchItems] = useState<SecAuditBatch[]>([]);
+  const [batchBusy, setBatchBusy] = useState<"idle" | "creating" | "loading" | "cancelling">("idle");
+  const [scheduleEndpointId, setScheduleEndpointId] = useState<string>("endpoint-dev-01");
+  const [scheduleIntervalMinutes, setScheduleIntervalMinutes] = useState<string>("60");
+  const [scheduleItems, setScheduleItems] = useState<SecAuditSchedule[]>([]);
+  const [scheduleBusy, setScheduleBusy] = useState<"idle" | "creating" | "loading" | "deleting">("idle");
 
   const packageMeta = useMemo(
     () => PACKAGES.find((p) => p.id === selectedPackage) ?? PACKAGES[0],
@@ -749,6 +791,174 @@ export function SecAuditPanel() {
     }
   };
 
+  const loadBatches = async () => {
+    setBatchBusy("loading");
+    try {
+      const response = await fetch(apiUrl("/api/v1/secaudit/batches?tenantId=default"));
+      if (!response.ok) {
+        throw new Error(`batches_http_${response.status}`);
+      }
+      const data = (await response.json()) as { items?: SecAuditBatch[] };
+      setBatchItems(Array.isArray(data.items) ? data.items : []);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to load SecAudit batches");
+    } finally {
+      setBatchBusy("idle");
+    }
+  };
+
+  const createBatch = async () => {
+    if (selectedModules.length === 0) {
+      setRunError("Select at least one module before creating a batch.");
+      return;
+    }
+
+    const endpointIds = batchEndpointIds
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    if (endpointIds.length === 0) {
+      setRunError("Provide at least one endpoint id for the batch.");
+      return;
+    }
+
+    setBatchBusy("creating");
+    setRunError(null);
+    try {
+      const response = await fetch(apiUrl("/api/v1/secaudit/batches"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          tenantId: "default",
+          operatorId: "operator-ui",
+          packageId: selectedPackage,
+          targetOs,
+          executionLevel,
+          modules: selectedModules.map((m) => m.id),
+          endpointIds,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `batch_create_http_${response.status}`);
+      }
+
+      await loadBatches();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to create SecAudit batch");
+    } finally {
+      setBatchBusy("idle");
+    }
+  };
+
+  const cancelBatch = async (batchId: string) => {
+    setBatchBusy("cancelling");
+    setRunError(null);
+    try {
+      const response = await fetch(apiUrl(`/api/v1/secaudit/batches/${batchId}/cancel`), {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `batch_cancel_http_${response.status}`);
+      }
+      await loadBatches();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to cancel SecAudit batch");
+    } finally {
+      setBatchBusy("idle");
+    }
+  };
+
+  const loadSchedules = async () => {
+    setScheduleBusy("loading");
+    try {
+      const response = await fetch(apiUrl("/api/v1/secaudit/schedules"));
+      if (!response.ok) {
+        throw new Error(`schedules_http_${response.status}`);
+      }
+      const data = (await response.json()) as { items?: SecAuditSchedule[] };
+      setScheduleItems(Array.isArray(data.items) ? data.items : []);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to load SecAudit schedules");
+    } finally {
+      setScheduleBusy("idle");
+    }
+  };
+
+  const createSchedule = async () => {
+    if (selectedModules.length === 0) {
+      setRunError("Select at least one module before creating a schedule.");
+      return;
+    }
+
+    if (!scheduleEndpointId.trim()) {
+      setRunError("Provide an endpoint id for the schedule.");
+      return;
+    }
+
+    const intervalMinutes = Number(scheduleIntervalMinutes);
+    if (!Number.isFinite(intervalMinutes) || intervalMinutes < 5) {
+      setRunError("Interval must be a number >= 5 minutes.");
+      return;
+    }
+
+    setScheduleBusy("creating");
+    setRunError(null);
+    try {
+      const response = await fetch(apiUrl("/api/v1/secaudit/schedules"), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          tenantId: "default",
+          operatorId: "operator-ui",
+          endpointId: scheduleEndpointId.trim(),
+          packageId: selectedPackage,
+          targetOs,
+          executionLevel,
+          modules: selectedModules.map((m) => m.id),
+          intervalMinutes,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `schedule_create_http_${response.status}`);
+      }
+
+      await loadSchedules();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to create SecAudit schedule");
+    } finally {
+      setScheduleBusy("idle");
+    }
+  };
+
+  const deleteSchedule = async (scheduleId: string) => {
+    setScheduleBusy("deleting");
+    setRunError(null);
+    try {
+      const response = await fetch(apiUrl(`/api/v1/secaudit/schedules/${scheduleId}`), {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `schedule_delete_http_${response.status}`);
+      }
+      await loadSchedules();
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Failed to delete SecAudit schedule");
+    } finally {
+      setScheduleBusy("idle");
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5 p-6 text-slate-900">
       <section className="tv-panel p-5">
@@ -945,6 +1155,172 @@ export function SecAuditPanel() {
               </button>
               {activePlanId ? <p className="text-[11px] text-slate-600">Plan: {activePlanId}</p> : null}
               {runError ? <p className="text-xs text-danger">{runError}</p> : null}
+            </div>
+          </div>
+
+          <div className="tv-panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Batch Operations</h3>
+              <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                {batchItems.length} batches
+              </span>
+            </div>
+
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-slate-600">Endpoint IDs (comma-separated)</span>
+              <input
+                value={batchEndpointIds}
+                onChange={(e) => setBatchEndpointIds(e.target.value)}
+                placeholder="endpoint-a, endpoint-b"
+                className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+              />
+            </label>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                onClick={createBatch}
+                disabled={batchBusy !== "idle"}
+                className="rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-xs font-semibold text-brand transition hover:bg-brand/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {batchBusy === "creating" ? "Creating..." : "Create Batch"}
+              </button>
+              <button
+                onClick={loadBatches}
+                disabled={batchBusy !== "idle"}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {batchBusy === "loading" ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+
+            <div className="mt-3 max-h-60 space-y-2 overflow-auto">
+              {batchItems.length === 0 ? (
+                <p className="text-xs text-slate-500">No batches yet. Create one from the current module selection.</p>
+              ) : (
+                batchItems.map((batch) => (
+                  <div key={batch.id} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-900">{batch.id}</p>
+                        <p className="text-[11px] text-slate-500">{batch.endpointIds.length} endpoints · {new Date(batch.createdAt).toLocaleString()}</p>
+                      </div>
+                      <span className={cn(
+                        "rounded-full border px-2 py-0.5 text-[10px]",
+                        batch.status === "completed"
+                          ? "border-success/30 bg-success/10 text-success"
+                          : batch.status === "failed" || batch.status === "cancelled"
+                            ? "border-danger/30 bg-danger/10 text-danger"
+                            : batch.status === "partial"
+                              ? "border-warn/30 bg-warn/10 text-warn"
+                              : "border-brand/30 bg-brand/10 text-brand",
+                      )}>
+                        {batch.status}
+                      </span>
+                    </div>
+
+                    {batch.summary ? (
+                      <div className="mt-2 grid grid-cols-5 gap-1 text-[10px] text-slate-700">
+                        <div className="rounded border border-blue-100 bg-blue-50/60 px-1.5 py-1 text-center">T {batch.summary.total}</div>
+                        <div className="rounded border border-blue-100 bg-blue-50/60 px-1.5 py-1 text-center">C {batch.summary.completed}</div>
+                        <div className="rounded border border-blue-100 bg-blue-50/60 px-1.5 py-1 text-center">F {batch.summary.failed}</div>
+                        <div className="rounded border border-blue-100 bg-blue-50/60 px-1.5 py-1 text-center">P {batch.summary.partial}</div>
+                        <div className="rounded border border-blue-100 bg-blue-50/60 px-1.5 py-1 text-center">R {batch.summary.running}</div>
+                      </div>
+                    ) : null}
+
+                    {batch.status === "running" ? (
+                      <div className="mt-2">
+                        <button
+                          onClick={() => cancelBatch(batch.id)}
+                          disabled={batchBusy !== "idle"}
+                          className="rounded border border-danger/30 bg-danger/10 px-2 py-1 text-[10px] font-semibold text-danger disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {batchBusy === "cancelling" ? "Cancelling..." : "Cancel Batch"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="tv-panel p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Schedule Operations</h3>
+              <span className="rounded-full border border-blue-100 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                {scheduleItems.length} schedules
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="grid gap-1 col-span-2">
+                <span className="text-xs font-medium text-slate-600">Endpoint ID</span>
+                <input
+                  value={scheduleEndpointId}
+                  onChange={(e) => setScheduleEndpointId(e.target.value)}
+                  placeholder="endpoint-dev-01"
+                  className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                />
+              </label>
+
+              <label className="grid gap-1">
+                <span className="text-xs font-medium text-slate-600">Interval (minutes)</span>
+                <input
+                  value={scheduleIntervalMinutes}
+                  onChange={(e) => setScheduleIntervalMinutes(e.target.value)}
+                  inputMode="numeric"
+                  className="rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-brand"
+                />
+              </label>
+
+              <div className="rounded-lg border border-blue-100 bg-blue-50/70 px-2.5 py-2 text-[11px] text-slate-700">
+                <p className="font-semibold">Template</p>
+                <p>{selectedPackage} · {executionLevel}</p>
+                <p>{selectedModules.length} modules</p>
+              </div>
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                onClick={createSchedule}
+                disabled={scheduleBusy !== "idle"}
+                className="rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-xs font-semibold text-brand transition hover:bg-brand/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {scheduleBusy === "creating" ? "Creating..." : "Create Schedule"}
+              </button>
+              <button
+                onClick={loadSchedules}
+                disabled={scheduleBusy !== "idle"}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {scheduleBusy === "loading" ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+
+            <div className="mt-3 max-h-60 space-y-2 overflow-auto">
+              {scheduleItems.length === 0 ? (
+                <p className="text-xs text-slate-500">No schedules yet. Create one from the current module selection.</p>
+              ) : (
+                scheduleItems.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-900">{item.id}</p>
+                        <p className="text-[11px] text-slate-500">{item.endpointId} · every {item.intervalMinutes} min</p>
+                        <p className="text-[11px] text-slate-500">next: {new Date(item.nextRunAt).toLocaleString()}</p>
+                      </div>
+                      <button
+                        onClick={() => deleteSchedule(item.id)}
+                        disabled={scheduleBusy !== "idle"}
+                        className="rounded border border-danger/30 bg-danger/10 px-2 py-1 text-[10px] font-semibold text-danger disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {scheduleBusy === "deleting" ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

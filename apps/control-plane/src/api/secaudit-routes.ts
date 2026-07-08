@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
+import pg from "pg";
 
 import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
@@ -55,7 +56,7 @@ type BatchRecord = {
   endpointIds: string[];
   planIds: string[];
   createdAt: string;
-  status: "running" | "completed" | "partial" | "failed";
+  status: "running" | "completed" | "partial" | "failed" | "cancelled";
 };
 
 type ScheduleRecord = {
@@ -90,6 +91,11 @@ type PreHandlerFn = (req: FastifyRequest, reply: FastifyReply, done: () => void)
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 function toSeverity(moduleId: string): "critical" | "high" | "medium" | "low" {
@@ -181,6 +187,208 @@ export function registerSecAuditRoutesWithDeps(
   const batches = new Map<string, BatchRecord>();
   const schedules = new Map<string, ScheduleRecord>();
   const remediationStates = new Map<string, RemediationState>();
+  const dbUrl = process.env.NODE_ENV === "test" ? undefined : process.env.SECAUDIT_DB_URL;
+  const dbPool = dbUrl ? new pg.Pool({ connectionString: dbUrl }) : null;
+  let persistenceHydrated = dbPool === null;
+  let hydratePromise: Promise<void> | null = null;
+
+  const ensurePersistenceSchema = async () => {
+    if (!dbPool) return;
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS secaudit_batches (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        operator_id TEXT NOT NULL,
+        endpoint_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        plan_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial', 'failed', 'cancelled')),
+        created_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS secaudit_schedules (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        operator_id TEXT NOT NULL,
+        endpoint_id TEXT NOT NULL,
+        package_id TEXT NOT NULL,
+        target_os TEXT NOT NULL,
+        execution_level TEXT NOT NULL,
+        modules_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        interval_minutes INTEGER NOT NULL,
+        next_run_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_secaudit_batches_tenant_created
+        ON secaudit_batches (tenant_id, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_secaudit_schedules_next_run
+        ON secaudit_schedules (next_run_at ASC);
+    `);
+  };
+
+  const saveBatchToDb = async (batch: BatchRecord) => {
+    if (!dbPool) return;
+    await dbPool.query(
+      `
+        INSERT INTO secaudit_batches (
+          id,
+          tenant_id,
+          operator_id,
+          endpoint_ids_json,
+          plan_ids_json,
+          status,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7::timestamptz)
+        ON CONFLICT (id)
+        DO UPDATE SET
+          tenant_id = EXCLUDED.tenant_id,
+          operator_id = EXCLUDED.operator_id,
+          endpoint_ids_json = EXCLUDED.endpoint_ids_json,
+          plan_ids_json = EXCLUDED.plan_ids_json,
+          status = EXCLUDED.status,
+          created_at = EXCLUDED.created_at
+      `,
+      [
+        batch.id,
+        batch.tenantId,
+        batch.operatorId,
+        JSON.stringify(batch.endpointIds),
+        JSON.stringify(batch.planIds),
+        batch.status,
+        batch.createdAt,
+      ],
+    );
+  };
+
+  const saveScheduleToDb = async (schedule: ScheduleRecord) => {
+    if (!dbPool) return;
+    await dbPool.query(
+      `
+        INSERT INTO secaudit_schedules (
+          id,
+          tenant_id,
+          operator_id,
+          endpoint_id,
+          package_id,
+          target_os,
+          execution_level,
+          modules_json,
+          interval_minutes,
+          next_run_at,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::timestamptz, $11::timestamptz)
+        ON CONFLICT (id)
+        DO UPDATE SET
+          tenant_id = EXCLUDED.tenant_id,
+          operator_id = EXCLUDED.operator_id,
+          endpoint_id = EXCLUDED.endpoint_id,
+          package_id = EXCLUDED.package_id,
+          target_os = EXCLUDED.target_os,
+          execution_level = EXCLUDED.execution_level,
+          modules_json = EXCLUDED.modules_json,
+          interval_minutes = EXCLUDED.interval_minutes,
+          next_run_at = EXCLUDED.next_run_at,
+          created_at = EXCLUDED.created_at
+      `,
+      [
+        schedule.id,
+        schedule.tenantId,
+        schedule.operatorId,
+        schedule.endpointId,
+        schedule.packageId,
+        schedule.targetOs,
+        schedule.executionLevel,
+        JSON.stringify(schedule.modules),
+        schedule.intervalMinutes,
+        schedule.nextRunAt,
+        schedule.createdAt,
+      ],
+    );
+  };
+
+  const deleteScheduleFromDb = async (id: string) => {
+    if (!dbPool) return;
+    await dbPool.query("DELETE FROM secaudit_schedules WHERE id = $1", [id]);
+  };
+
+  const ensurePersistenceHydrated = async () => {
+    if (persistenceHydrated || !dbPool) return;
+    if (!hydratePromise) {
+      hydratePromise = (async () => {
+        try {
+          await ensurePersistenceSchema();
+
+          const batchResult = await dbPool.query<{
+            id: string;
+            tenant_id: string;
+            operator_id: string;
+            endpoint_ids_json: unknown;
+            plan_ids_json: unknown;
+            status: BatchRecord["status"];
+            created_at: string | Date;
+          }>(
+            `SELECT id, tenant_id, operator_id, endpoint_ids_json, plan_ids_json, status, created_at
+             FROM secaudit_batches`,
+          );
+
+          for (const row of batchResult.rows) {
+            batches.set(row.id, {
+              id: row.id,
+              tenantId: row.tenant_id,
+              operatorId: row.operator_id,
+              endpointIds: asStringArray(row.endpoint_ids_json),
+              planIds: asStringArray(row.plan_ids_json),
+              status: row.status,
+              createdAt: new Date(row.created_at).toISOString(),
+            });
+          }
+
+          const scheduleResult = await dbPool.query<{
+            id: string;
+            tenant_id: string;
+            operator_id: string;
+            endpoint_id: string;
+            package_id: string;
+            target_os: "windows" | "linux" | "macos" | "all";
+            execution_level: SecAuditExecutionLevel;
+            modules_json: unknown;
+            interval_minutes: number;
+            next_run_at: string | Date;
+            created_at: string | Date;
+          }>(
+            `SELECT id, tenant_id, operator_id, endpoint_id, package_id, target_os, execution_level,
+                    modules_json, interval_minutes, next_run_at, created_at
+             FROM secaudit_schedules`,
+          );
+
+          for (const row of scheduleResult.rows) {
+            schedules.set(row.id, {
+              id: row.id,
+              tenantId: row.tenant_id,
+              operatorId: row.operator_id,
+              endpointId: row.endpoint_id,
+              packageId: row.package_id,
+              targetOs: row.target_os,
+              executionLevel: row.execution_level,
+              modules: asStringArray(row.modules_json),
+              intervalMinutes: row.interval_minutes,
+              nextRunAt: new Date(row.next_run_at).toISOString(),
+              createdAt: new Date(row.created_at).toISOString(),
+            });
+          }
+        } catch (error) {
+          app.log.error({ error }, "Failed to hydrate SecAudit batch/schedule persistence, continuing in-memory");
+        } finally {
+          persistenceHydrated = true;
+          hydratePromise = null;
+        }
+      })();
+    }
+    await hydratePromise;
+  };
 
   const remediationKey = (planId: string, moduleId: string) => `${planId}:${moduleId}`;
 
@@ -334,7 +542,38 @@ export function registerSecAuditRoutesWithDeps(
     return store.getById(plan.id) ?? null;
   };
 
+  const summarizeBatch = (batch: BatchRecord) => {
+    const plans = batch.planIds.map((id) => store.getById(id)).filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const completed = plans.filter((p) => p.status === "completed").length;
+    const failed = plans.filter((p) => p.status === "failed").length;
+    const partial = plans.filter((p) => p.status === "partial").length;
+    const running = plans.filter((p) => p.status === "running" || p.status === "draft").length;
+
+    const nextStatus: BatchRecord["status"] = batch.status === "cancelled"
+      ? "cancelled"
+      : completed === plans.length
+        ? "completed"
+        : failed === plans.length
+          ? "failed"
+          : (partial > 0 || failed > 0) && completed > 0
+            ? "partial"
+            : "running";
+
+    return {
+      ...batch,
+      status: nextStatus,
+      summary: {
+        total: plans.length,
+        completed,
+        failed,
+        partial,
+        running,
+      },
+    };
+  };
+
   const schedulerTimer = setInterval(async () => {
+    await ensurePersistenceHydrated();
     const now = Date.now();
     for (const schedule of schedules.values()) {
       if (new Date(schedule.nextRunAt).getTime() > now) continue;
@@ -350,12 +589,17 @@ export function registerSecAuditRoutesWithDeps(
       await runPlan(created.id);
       schedule.nextRunAt = new Date(now + schedule.intervalMinutes * 60_000).toISOString();
       schedules.set(schedule.id, schedule);
+      await saveScheduleToDb(schedule);
     }
   }, 30_000);
 
   app.addHook("onClose", (_instance, done) => {
     clearInterval(schedulerTimer);
-    done();
+    if (!dbPool) {
+      done();
+      return;
+    }
+    dbPool.end().then(() => done()).catch(() => done());
   });
 
   app.post(
@@ -541,7 +785,11 @@ export function registerSecAuditRoutesWithDeps(
         planId: req.params.id,
         moduleId: req.params.moduleId,
         status: status ?? current?.status ?? "open",
-        notes: req.body?.notes ?? current?.notes,
+        ...(req.body?.notes !== undefined
+          ? { notes: req.body.notes }
+          : current?.notes !== undefined
+            ? { notes: current.notes }
+            : {}),
         updatedAt: new Date().toISOString(),
       };
       remediationStates.set(key, next);
@@ -601,6 +849,7 @@ export function registerSecAuditRoutesWithDeps(
   app.post(
     "/api/v1/secaudit/batches",
     async (req: FastifyRequest<{ Body: BatchCreateBody }>, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
       const body = req.body;
       if (
         !body ||
@@ -640,44 +889,113 @@ export function registerSecAuditRoutesWithDeps(
         status: "running",
       };
       batches.set(batch.id, batch);
+      await saveBatchToDb(batch);
       return reply.code(201).send(batch);
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/batches",
+    async (req: FastifyRequest<{ Querystring: TenantQuery }>, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
+      const tenantFilter = req.query?.tenantId;
+      const source = Array.from(batches.values())
+        .filter((item) => !isNonEmptyString(tenantFilter) || item.tenantId === tenantFilter)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+      const items: Array<ReturnType<typeof summarizeBatch>> = [];
+      for (const item of source) {
+        const summarized = summarizeBatch(item);
+        const updated: BatchRecord = {
+          id: summarized.id,
+          tenantId: summarized.tenantId,
+          operatorId: summarized.operatorId,
+          endpointIds: summarized.endpointIds,
+          planIds: summarized.planIds,
+          createdAt: summarized.createdAt,
+          status: summarized.status,
+        };
+        batches.set(updated.id, updated);
+        await saveBatchToDb(updated);
+        items.push(summarized);
+      }
+
+      return reply.code(200).send({ items, count: items.length });
     },
   );
 
   app.get(
     "/api/v1/secaudit/batches/:id",
     async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
       const batch = batches.get(req.params.id);
       if (!batch) {
         return reply.code(404).send({ code: "not_found", message: "secaudit batch not found" });
       }
 
-      const plans = batch.planIds.map((id) => store.getById(id)).filter((x): x is NonNullable<typeof x> => Boolean(x));
-      const completed = plans.filter((p) => p.status === "completed").length;
-      const failed = plans.filter((p) => p.status === "failed").length;
-      const partial = plans.filter((p) => p.status === "partial").length;
-      const running = plans.filter((p) => p.status === "running" || p.status === "draft").length;
-
-      const nextStatus: BatchRecord["status"] = completed === plans.length
-        ? "completed"
-        : failed === plans.length
-          ? "failed"
-          : (partial > 0 || failed > 0) && completed > 0
-            ? "partial"
-            : "running";
-
-      const updated = { ...batch, status: nextStatus };
+      const summarized = summarizeBatch(batch);
+      const updated: BatchRecord = {
+        id: summarized.id,
+        tenantId: summarized.tenantId,
+        operatorId: summarized.operatorId,
+        endpointIds: summarized.endpointIds,
+        planIds: summarized.planIds,
+        createdAt: summarized.createdAt,
+        status: summarized.status,
+      };
       batches.set(updated.id, updated);
+      await saveBatchToDb(updated);
+
+      return reply.code(200).send(summarized);
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/batches/:id/cancel",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
+      const batch = batches.get(req.params.id);
+      if (!batch) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit batch not found" });
+      }
+
+      for (const planId of batch.planIds) {
+        const plan = store.getById(planId);
+        if (!plan) continue;
+
+        for (const result of plan.results) {
+          if (!result.commandJobId) continue;
+          if (result.status !== "running" && result.status !== "pending") continue;
+          await app.inject({
+            method: "POST",
+            url: `/api/v1/commands/jobs/${result.commandJobId}/cancel`,
+          });
+        }
+
+        store.update(plan.id, (draft) => {
+          draft.results = draft.results.map((item) => {
+            if (item.status === "completed" || item.status === "failed") {
+              return item;
+            }
+            return {
+              ...item,
+              status: "failed",
+              error: item.error ?? "batch_cancelled",
+              updatedAt: new Date().toISOString(),
+            };
+          });
+          draft.status = "failed";
+        });
+      }
+
+      const next: BatchRecord = { ...batch, status: "cancelled" };
+      batches.set(next.id, next);
+      await saveBatchToDb(next);
+      const summarized = summarizeBatch(next);
 
       return reply.code(200).send({
-        ...updated,
-        summary: {
-          total: plans.length,
-          completed,
-          failed,
-          partial,
-          running,
-        },
+        ...summarized,
+        cancelled: true,
       });
     },
   );
@@ -685,6 +1003,7 @@ export function registerSecAuditRoutesWithDeps(
   app.post(
     "/api/v1/secaudit/schedules",
     async (req: FastifyRequest<{ Body: ScheduleCreateBody }>, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
       const body = req.body;
       if (
         !body ||
@@ -718,6 +1037,7 @@ export function registerSecAuditRoutesWithDeps(
         nextRunAt: new Date(now + intervalMinutes * 60_000).toISOString(),
       };
       schedules.set(schedule.id, schedule);
+      await saveScheduleToDb(schedule);
       return reply.code(201).send(schedule);
     },
   );
@@ -725,6 +1045,7 @@ export function registerSecAuditRoutesWithDeps(
   app.get(
     "/api/v1/secaudit/schedules",
     async (_req: FastifyRequest, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
       const items = Array.from(schedules.values()).sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
       return reply.code(200).send({ items, count: items.length });
     },
@@ -733,11 +1054,13 @@ export function registerSecAuditRoutesWithDeps(
   app.delete(
     "/api/v1/secaudit/schedules/:id",
     async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      await ensurePersistenceHydrated();
       const exists = schedules.has(req.params.id);
       if (!exists) {
         return reply.code(404).send({ code: "not_found", message: "secaudit schedule not found" });
       }
       schedules.delete(req.params.id);
+      await deleteScheduleFromDb(req.params.id);
       return reply.code(200).send({ id: req.params.id, deleted: true });
     },
   );

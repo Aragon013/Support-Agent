@@ -486,13 +486,10 @@ export function registerCommandRoutesWithDeps(
     },
   );
 
-  app.post(
+  app.post<{ Body: PurgeBody }>(
     "/api/v1/internal/retention/purge",
     { preHandler: requireAdminKey },
-    async (
-      req: FastifyRequest<{ Body: PurgeBody }>,
-      reply: FastifyReply,
-    ) => {
+    async (req, reply) => {
       const body = req.body;
       const tenantId = isNonEmptyString(body?.tenantId) ? body.tenantId : undefined;
       const requestedDays = body?.retentionDays;

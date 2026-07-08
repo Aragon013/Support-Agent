@@ -17,10 +17,12 @@
     "@types/pdfkit": "^0.17.6",
     "fastify": "^5.0.0",
     "pdfkit": "^0.19.1",
+    "pg": "^8.22.0",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
     "@types/ws": "^8.18.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",
