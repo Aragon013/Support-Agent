@@ -1,5 +1,6 @@
 import type { AlertChannel, AlertEvent, AlertSeverity } from "../domain/alert-store.js";
 import { InMemoryAlertStore } from "../domain/alert-store.js";
+import { decryptAlertSecret } from "./alert-crypto.js";
 
 type DispatchInput = {
   category: AlertEvent["category"];
@@ -99,8 +100,14 @@ export class AlertDispatcher {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
       const headers: Record<string, string> = { "content-type": "application/json" };
-      if (channel.auth?.headerName && channel.auth.token) {
-        headers[channel.auth.headerName] = channel.auth.token;
+      if (channel.auth?.headerName && channel.auth.tokenEncrypted) {
+        let token: string;
+        try {
+          token = decryptAlertSecret(channel.auth.tokenEncrypted);
+        } catch {
+          return { status: "failed", detail: "auth_decrypt_failed" };
+        }
+        headers[channel.auth.headerName] = token;
       }
       const res = await fetch(channel.target, {
         method: "POST",

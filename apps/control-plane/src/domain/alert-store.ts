@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { encryptAlertSecret } from "../services/alert-crypto.js";
 
 export type AlertChannelType = "slack" | "teams" | "webhook" | "email";
 
@@ -9,7 +10,8 @@ export type AlertChannel = {
   target: string;
   auth?: {
     headerName: string;
-    token: string;
+    tokenEncrypted: string;
+    tokenMasked: string;
   };
   enabled: boolean;
   createdAt: string;
@@ -49,6 +51,11 @@ export class InMemoryAlertStore {
   private readonly channels = new Map<string, AlertChannel>();
   private readonly events: AlertEvent[] = [];
 
+  private static maskToken(secret: string): string {
+    if (secret.length <= 6) return "******";
+    return `${secret.slice(0, 2)}***${secret.slice(-2)}`;
+  }
+
   createChannel(input: CreateChannelInput): AlertChannel {
     const now = new Date().toISOString();
     const channel: AlertChannel = {
@@ -56,7 +63,15 @@ export class InMemoryAlertStore {
       name: input.name,
       type: input.type,
       target: input.target,
-      ...(input.auth !== undefined ? { auth: input.auth } : {}),
+      ...(input.auth !== undefined
+        ? {
+          auth: {
+            headerName: input.auth.headerName,
+            tokenEncrypted: encryptAlertSecret(input.auth.token),
+            tokenMasked: InMemoryAlertStore.maskToken(input.auth.token),
+          },
+        }
+        : {}),
       enabled: input.enabled ?? true,
       createdAt: now,
       updatedAt: now,
@@ -100,7 +115,14 @@ export class InMemoryAlertStore {
         return rest;
       })()
       : patch.auth !== undefined
-        ? { ...base, auth: patch.auth }
+        ? {
+          ...base,
+          auth: {
+            headerName: patch.auth.headerName,
+            tokenEncrypted: encryptAlertSecret(patch.auth.token),
+            tokenMasked: InMemoryAlertStore.maskToken(patch.auth.token),
+          },
+        }
         : base;
     this.channels.set(id, next);
     return next;

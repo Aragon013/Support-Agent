@@ -36,17 +36,12 @@ function isChannelType(v: unknown): v is AlertChannelType {
   return v === "slack" || v === "teams" || v === "webhook" || v === "email";
 }
 
-function maskSecret(secret: string): string {
-  if (secret.length <= 6) return "******";
-  return `${secret.slice(0, 2)}***${secret.slice(-2)}`;
-}
-
 function sanitizeChannel(ch: {
   id: string;
   name: string;
   type: AlertChannelType;
   target: string;
-  auth?: { headerName: string; token: string };
+  auth?: { headerName: string; tokenEncrypted: string; tokenMasked: string };
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -63,7 +58,7 @@ function sanitizeChannel(ch: {
       ? {
         auth: {
           headerName: ch.auth.headerName,
-          tokenMasked: maskSecret(ch.auth.token),
+          tokenMasked: ch.auth.tokenMasked,
         },
       }
       : {}),
