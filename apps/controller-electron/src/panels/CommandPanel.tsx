@@ -5,9 +5,11 @@ import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
 import { z } from "zod";
 
+const CommandParamSchema = z.record(z.string(), z.string().trim());
+
 const DispatchResultSchema = z.object({
   id: z.string(),
-  status: z.string(),
+  status: z.enum(["queued", "mfa_pending", "blocked", "running", "completed", "failed", "cancelled"]),
   requiresMfa: z.boolean().optional(),
   riskLevel: z.string().optional(),
   mfaRequired: z.boolean().optional(),
@@ -46,6 +48,12 @@ export function CommandPanel() {
     setError(null);
 
     try {
+      const parsedParams = CommandParamSchema.safeParse(params);
+      if (!parsedParams.success) {
+        setError(parsedParams.error.issues[0]?.message ?? "Invalid command parameters.");
+        return;
+      }
+
       const res = await fetch(apiUrl("/api/v1/commands/jobs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -54,12 +62,18 @@ export function CommandPanel() {
           endpointId: "endpoint-1",
           operatorId: "operator-1",
           catalogCommandId: command.id,
-          requestedParams: params,
+          requestedParams: parsedParams.data,
         }),
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { message?: string; code?: string } | null;
+        setError(body?.message ?? body?.code ?? `HTTP ${res.status}`);
+        return;
+      }
+
       const parsed = DispatchResultSchema.safeParse(await res.json());
       if (!parsed.success) {
-        setError("Unexpected response from server.");
+        setError(parsed.error.issues[0]?.message ?? "Unexpected response from server.");
         return;
       }
       setResult(parsed.data);

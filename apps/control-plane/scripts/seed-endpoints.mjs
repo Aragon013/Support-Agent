@@ -55,7 +55,7 @@ async function registerEndpoint(endpoint) {
     body: JSON.stringify(endpoint),
   });
 
-  const body = await res.json();
+  const body = await res.json().catch(() => ({}));
 
   if (res.ok) {
     console.log(`  ✓ ${endpoint.endpointId} (${endpoint.installProfile})`);
@@ -73,6 +73,24 @@ async function healthCheck() {
   }
 }
 
+async function verifyRegistry() {
+  const res = await fetch(`${BASE_URL}/api/v1/endpoints`, {
+    headers: { "x-api-key": API_KEY },
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message ?? body.code ?? `registry list failed (${res.status})`);
+  }
+
+  const body = await res.json().catch(() => null);
+  if (!body || typeof body.count !== "number" || !Array.isArray(body.items)) {
+    throw new Error("unexpected registry list response shape");
+  }
+
+  return body;
+}
+
 async function main() {
   console.log(`\nSeed: ${BASE_URL}\n`);
 
@@ -84,10 +102,7 @@ async function main() {
   }
 
   console.log("\nVerifying:");
-  const listRes = await fetch(`${BASE_URL}/api/v1/endpoints`, {
-    headers: { "x-api-key": API_KEY },
-  });
-  const list = await listRes.json();
+  const list = await verifyRegistry();
   console.log(`  ${list.count} endpoints registered\n`);
 }
 

@@ -5,6 +5,8 @@ import { cn } from "@/lib/cn";
 import { apiUrl } from "@/lib/backend-url";
 import { z } from "zod";
 
+const TenantQuerySchema = z.string().trim().min(1, "Tenant ID is required");
+
 const AuditRecordSchema = z.object({
   id: z.string(),
   createdAt: z.string(),
@@ -18,7 +20,7 @@ const AuditRecordSchema = z.object({
 
 const AuditResponseSchema = z.object({
   items: z.array(AuditRecordSchema),
-  retentionDays: z.number().optional(),
+  retentionDays: z.number().int().nonnegative().optional(),
 });
 
 type AuditRecord = z.infer<typeof AuditRecordSchema>;
@@ -42,12 +44,16 @@ export function AuditPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
-    if (!tenantId.trim()) return;
+    const parsedTenant = TenantQuerySchema.safeParse(tenantId);
+    if (!parsedTenant.success) {
+      setError(parsedTenant.error.issues[0]?.message ?? "Tenant ID is required.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        apiUrl(`/api/v1/audit?tenantId=${encodeURIComponent(tenantId)}`),
+        apiUrl(`/api/v1/audit?tenantId=${encodeURIComponent(parsedTenant.data)}`),
       );
       if (!res.ok) {
         setError(`Failed to load records (HTTP ${res.status}).`);
@@ -55,7 +61,7 @@ export function AuditPanel() {
       }
       const parsed = AuditResponseSchema.safeParse(await res.json());
       if (!parsed.success) {
-        setError("Unexpected response format from server.");
+        setError(parsed.error.issues[0]?.message ?? "Unexpected response format from server.");
         return;
       }
       setRecords(parsed.data.items);
