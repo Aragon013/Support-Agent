@@ -7,6 +7,8 @@ import { registerCommandRoutesWithDeps } from "./api/command-routes.js";
 import { registerSessionRoutesWithDeps } from "./api/session-routes.js";
 import { registerSecAuditRoutesWithDeps } from "./api/secaudit-routes.js";
 import { registerComplianceRoutesWithDeps } from "./api/compliance-routes.js";
+import { registerExceptionRoutesWithDeps } from "./api/exception-routes.js";
+import { InMemoryExceptionStore } from "./domain/exception-store.js";
 import { InMemoryAuditLogStore } from "./domain/audit-log-store.js";
 import { InMemorySecAuditPlanStore } from "./domain/secaudit-plan-store.js";
 
@@ -31,6 +33,7 @@ export function buildApp(): FastifyInstance {
   const planStore = new InMemorySecAuditPlanStore(
     persistencePath,
   );
+  const exceptionStore = new InMemoryExceptionStore();
 
   void app.register(rateLimit, {
     global: false, // aplica solo en rutas que lo declaren explícitamente
@@ -42,6 +45,7 @@ export function buildApp(): FastifyInstance {
     registerSessionRoutesWithDeps(app, { auditStore, requireAdminKey });
     registerSecAuditRoutesWithDeps(app, { auditStore, requireAdminKey, planStore });
     registerComplianceRoutesWithDeps(app, { planStore });
+    registerExceptionRoutesWithDeps(app, { store: exceptionStore });
   });
 
   app.get("/health", async () => {

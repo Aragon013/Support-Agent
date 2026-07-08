@@ -7,6 +7,7 @@ import { JobsPanel } from "@/panels/JobsPanel";
 import { AuditPanel } from "@/panels/AuditPanel";
 import { SecAuditPanel } from "@/panels/SecAuditPanel";
 import { CompliancePanel } from "@/panels/CompliancePanel";
+import { ExceptionsPanel } from "@/panels/ExceptionsPanel";
 import { MonitorPanel } from "@/panels/MonitorPanel";
 import { SessionsPanel } from "@/panels/SessionsPanel";
 import { SupportPanel } from "@/panels/SupportPanel";
@@ -19,6 +20,7 @@ const PANELS: Record<NavTab, React.ElementType> = {
   audit:      AuditPanel,
   secaudit:   SecAuditPanel,
   compliance: CompliancePanel,
+  exceptions: ExceptionsPanel,
   monitor:    MonitorPanel,
   sessions:   SessionsPanel,
   settings:   SettingsPanel,
