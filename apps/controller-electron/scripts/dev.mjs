@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -56,6 +57,36 @@ const host = args.host ?? "127.0.0.1";
 const port = args.port ?? "5173";
 const rendererUrl = `http://${host}:${port}`;
 
+// ── Auto-bootstrap control-plane .env ────────────────────────────────────────
+const controlPlaneRoot = path.resolve(appRoot, "..", "control-plane");
+const controlPlaneEnv = path.join(controlPlaneRoot, ".env");
+if (!existsSync(controlPlaneEnv)) {
+  writeFileSync(
+    controlPlaneEnv,
+    [
+      "NODE_ENV=development",
+      "HOST=127.0.0.1",
+      "PORT=3000",
+      "ADMIN_API_KEY=dev-insecure-key-change-in-prod",
+      "SLACK_WEBHOOK_URL=",
+      "TEAMS_WEBHOOK_URL=",
+      "SMTP_URL=",
+      "ALERT_FROM_ADDRESS=",
+      "ALERT_RECIPIENTS=",
+      "ALERT_RECIPIENTS_CRITICAL=",
+    ].join("\n"),
+    "utf8",
+  );
+  console.log("[dev] Created apps/control-plane/.env with defaults");
+}
+
+// ── Start control-plane API ───────────────────────────────────────────────────
+const controlPlane = spawn(npmCommand, ["run", "dev"], {
+  cwd: controlPlaneRoot,
+  stdio: "inherit",
+  shell: process.platform === "win32",
+});
+
 let shuttingDown = false;
 
 const renderer = spawn(viteBinary, ["--host", host, "--port", String(port)], {
@@ -78,6 +109,7 @@ function shutdown(code = 0) {
   shuttingDown = true;
   killChild(renderer);
   killChild(electron);
+  killChild(controlPlane);
   process.exit(code);
 }
 
@@ -98,6 +130,11 @@ electron.on("exit", (code) => {
 
 electron.on("error", (error) => {
   console.error(error);
+  shutdown(1);
+});
+
+controlPlane.on("error", (error) => {
+  console.error("[control-plane]", error);
   shutdown(1);
 });
 
