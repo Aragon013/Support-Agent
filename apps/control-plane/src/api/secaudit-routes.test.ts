@@ -308,13 +308,53 @@ describe("secaudit routes", () => {
     });
 
     const pdf = await app.inject({
-      method: "POST",
+      method: "GET",
       url: `/api/v1/secaudit/plans/${plan.id}/report/pdf`,
     });
 
     expect(pdf.statusCode).toBe(200);
     expect(pdf.headers["content-type"]).toContain("application/pdf");
     expect(pdf.headers["content-disposition"]).toContain(`audit-${plan.id}.pdf`);
+
+    await app.close();
+  });
+
+  it("exports CSV with modules and remediations", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-1",
+        endpointId: "endpoint-1",
+        operatorId: "operator-1",
+        packageId: "quick",
+        targetOs: "windows",
+        executionLevel: "safe",
+        modules: ["net.client-health"],
+      },
+    });
+
+    const plan = create.json() as { id: string };
+
+    await app.inject({ method: "POST", url: `/api/v1/secaudit/plans/${plan.id}/run` });
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan.id}/client-findings`,
+      payload: { moduleId: "net.client-health", findings: { status: "ok", severity: "medium" }, evidence: ["ping=12ms"] },
+    });
+
+    const csv = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/plans/${plan.id}/report/csv`,
+    });
+
+    expect(csv.statusCode).toBe(200);
+    expect(csv.headers["content-type"]).toContain("text/csv");
+    expect(csv.headers["content-disposition"]).toContain(`audit-${plan.id}.csv`);
+    expect(csv.payload).toContain("net.client-health");
+    expect(csv.payload).toContain("Module ID");
 
     await app.close();
   });

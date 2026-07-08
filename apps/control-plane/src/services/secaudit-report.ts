@@ -306,3 +306,46 @@ export function buildSecAuditReport(plan: SecAuditPlanRecord): SecAuditReport {
     })),
   };
 }
+
+function csvEsc(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+export function generateSecAuditCSV(report: SecAuditReport): string {
+  const rows: string[][] = [];
+
+  // Metadata block
+  rows.push(["Plan ID", report.id]);
+  rows.push(["Tenant", report.tenantId]);
+  rows.push(["Endpoint", report.endpointId]);
+  rows.push(["Package", report.packageId]);
+  rows.push(["OS", report.targetOs]);
+  rows.push(["Status", report.status]);
+  rows.push(["Score", String(report.executive.score ?? "N/A")]);
+  rows.push(["Critical", String(report.executive.severities.critical)]);
+  rows.push(["High", String(report.executive.severities.high)]);
+  rows.push(["Medium", String(report.executive.severities.medium)]);
+  rows.push(["Low", String(report.executive.severities.low)]);
+  rows.push(["Summary", report.executive.summary]);
+  rows.push([]);
+
+  // Modules section
+  rows.push(["--- MODULES ---"]);
+  rows.push(["Module ID", "Origin", "Status", "Severity", "Evidence Count", "Error"]);
+  for (const mod of report.modules) {
+    const severity = String((mod.findings as Record<string, unknown> | null)?.severity ?? "");
+    rows.push([mod.id, mod.origin, mod.status, severity, String(mod.evidence.length), mod.error ?? ""]);
+  }
+  rows.push([]);
+
+  // Remediations section
+  if (report.remediations.length > 0) {
+    rows.push(["--- REMEDIATIONS ---"]);
+    rows.push(["Module ID", "Priority", "Title", "Actions"]);
+    for (const rem of report.remediations) {
+      rows.push([rem.moduleId, rem.priority, rem.title, rem.actions.join(" | ")]);
+    }
+  }
+
+  return rows.map((row) => row.map((cell) => csvEsc(cell)).join(",")).join("\r\n");
+}

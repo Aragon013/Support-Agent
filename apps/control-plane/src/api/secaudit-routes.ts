@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
 import { generateSecAuditPDF } from "../services/pdf-generator.js";
-import { buildSecAuditReport } from "../services/secaudit-report.js";
+import { buildSecAuditReport, generateSecAuditCSV } from "../services/secaudit-report.js";
 
 type CreatePlanBody = {
   tenantId: string;
@@ -383,7 +383,7 @@ export function registerSecAuditRoutesWithDeps(
     },
   );
 
-  app.post(
+  app.get(
     "/api/v1/secaudit/plans/:id/report/pdf",
     async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
       const plan = store.getById(req.params.id);
@@ -400,6 +400,23 @@ export function registerSecAuditRoutesWithDeps(
       reply.header("Content-Type", "application/pdf");
       reply.header("Content-Disposition", `attachment; filename="audit-${plan.id}.pdf"`);
       return reply.code(200).send(pdfBuffer);
+    },
+  );
+
+  app.get(
+    "/api/v1/secaudit/plans/:id/report/csv",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const plan = store.getById(req.params.id);
+      if (!plan) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+
+      const report = buildSecAuditReport(plan);
+      const csv = generateSecAuditCSV(report);
+
+      reply.header("Content-Type", "text/csv; charset=utf-8");
+      reply.header("Content-Disposition", `attachment; filename="audit-${plan.id}.csv"`);
+      return reply.code(200).send(csv);
     },
   );
 

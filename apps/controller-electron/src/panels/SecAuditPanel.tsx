@@ -609,13 +609,13 @@ export function SecAuditPanel() {
     return data;
   };
 
-  const downloadReport = async () => {
+  const downloadReport = async (format: "pdf" | "csv" = "pdf") => {
     if (!activePlanId) {
       setRunError("No active plan to export.");
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${activePlanId}/report/pdf`));
+      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${activePlanId}/report/${format}`));
       if (!response.ok) {
         throw new Error(`report_http_${response.status}`);
       }
@@ -623,13 +623,13 @@ export function SecAuditPanel() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `secaudit-report-${activePlanId}-${new Date().toISOString().split("T")[0]}.pdf`;
+      a.download = `secaudit-report-${activePlanId}-${new Date().toISOString().split("T")[0]}.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : "Failed to download report");
+      setRunError(error instanceof Error ? error.message : `Failed to download ${format.toUpperCase()} report`);
     }
   };
 
@@ -1007,13 +1007,22 @@ export function SecAuditPanel() {
             )}
 
             {activePlanId && runState === "done" && (
-              <button
-                onClick={downloadReport}
-                className="mb-3 w-full rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-semibold text-brand transition hover:bg-brand/20"
-              >
-                <Download className="mr-2 inline h-4 w-4" />
-                Export Report (PDF)
-              </button>
+              <div className="mb-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => downloadReport("pdf")}
+                  className="rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-semibold text-brand transition hover:bg-brand/20"
+                >
+                  <Download className="mr-1.5 inline h-4 w-4" />
+                  PDF
+                </button>
+                <button
+                  onClick={() => downloadReport("csv")}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <Download className="mr-1.5 inline h-4 w-4" />
+                  CSV
+                </button>
+              </div>
             )}
 
             {report?.remediations?.length ? (
