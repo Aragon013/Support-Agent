@@ -36,7 +36,7 @@ export type SecAuditPlanRecord = {
   results: SecAuditModuleResult[];
   score?: number;
   severityBuckets?: SeverityBucket;
-  baselinePlanId?: string;
+  baselinePlanId: string | undefined;
   createdAt: string;
   updatedAt: string;
 };

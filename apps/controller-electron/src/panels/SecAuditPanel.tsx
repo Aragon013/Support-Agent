@@ -523,16 +523,15 @@ export function SecAuditPanel() {
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${activePlanId}/report`));
+      const response = await fetch(apiUrl(`/api/v1/secaudit/plans/${activePlanId}/report/pdf`));
       if (!response.ok) {
         throw new Error(`report_http_${response.status}`);
       }
-      const report = await response.json();
-      const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `secaudit-report-${activePlanId}-${new Date().toISOString().split("T")[0]}.json`;
+      a.download = `secaudit-report-${activePlanId}-${new Date().toISOString().split("T")[0]}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -910,7 +909,7 @@ export function SecAuditPanel() {
                 className="mb-3 w-full rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-semibold text-brand transition hover:bg-brand/20"
               >
                 <Download className="mr-2 inline h-4 w-4" />
-                Export Report (JSON)
+                Export Report (PDF)
               </button>
             )}
 

@@ -15,7 +15,10 @@ export type AuditEventCode =
   | "command.mfa.challenge.issued"
   | "command.mfa.challenge.failed"
   | "command.mfa.challenge.verified"
-  | "session.signal.policy_denied";
+  | "session.signal.policy_denied"
+  | "endpoint.registered"
+  | "endpoint.policy.header_override"
+  | "endpoint.policy.not_found";
 
 export type AuditLogRecord = {
   id: string;

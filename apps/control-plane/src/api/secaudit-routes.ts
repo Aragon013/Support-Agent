@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { InMemorySecAuditPlanStore, type SecAuditExecutionLevel, type AuditComparison } from "../domain/secaudit-plan-store.js";
 import { InMemoryAuditLogStore } from "../domain/audit-log-store.js";
+import { generateSecAuditPDF } from "../services/pdf-generator.js";
 
 type CreatePlanBody = {
   tenantId: string;
@@ -387,6 +388,26 @@ export function registerSecAuditRoutesWithDeps(
       };
 
       return reply.code(200).send(report);
+    },
+  );
+
+  app.post(
+    "/api/v1/secaudit/plans/:id/report/pdf",
+    async (req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply) => {
+      const plan = store.getById(req.params.id);
+      if (!plan) {
+        return reply.code(404).send({ code: "not_found", message: "secaudit plan not found" });
+      }
+
+      const comparison = store.compare(req.params.id);
+      const pdfBuffer = generateSecAuditPDF({
+        plan,
+        comparison,
+      });
+
+      reply.header("Content-Type", "application/pdf");
+      reply.header("Content-Disposition", `attachment; filename="audit-${plan.id}.pdf"`);
+      return reply.code(200).send(pdfBuffer);
     },
   );
 
