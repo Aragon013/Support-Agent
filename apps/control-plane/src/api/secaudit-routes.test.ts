@@ -314,4 +314,50 @@ describe("secaudit routes", () => {
 
     await app.close();
   });
+
+  it("dispatches extended mapped modules without catalog validation failures", async () => {
+    const app = buildApp();
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/secaudit/plans",
+      payload: {
+        tenantId: "tenant-extended",
+        endpointId: "endpoint-extended",
+        operatorId: "operator-extended",
+        packageId: "deep",
+        targetOs: "windows",
+        executionLevel: "deep",
+        modules: [
+          "host.code-integrity",
+          "identity.mfa-posture",
+          "identity.secrets-exposure",
+          "app.supply-chain",
+          "host.cloud-saas-posture",
+          "net.remote-access",
+          "threat.hunt-deep",
+          "incident.response-readiness",
+          "compliance.cis",
+          "compliance.hipaa",
+          "resilience.backup",
+        ],
+      },
+    });
+
+    expect(create.statusCode).toBe(201);
+    const plan = create.json() as { id: string };
+
+    const run = await app.inject({
+      method: "POST",
+      url: `/api/v1/secaudit/plans/${plan.id}/run`,
+    });
+
+    expect(run.statusCode).toBe(200);
+    const runBody = run.json() as { modules: Array<{ moduleId: string; status: string; error?: string }> };
+    expect(runBody.modules).toHaveLength(11);
+    expect(runBody.modules.every((item) => item.status === "running")).toBe(true);
+    expect(runBody.modules.some((item) => item.error === "module_not_mapped")).toBe(false);
+
+    await app.close();
+  });
 });

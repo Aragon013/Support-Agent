@@ -31,8 +31,27 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function toSeverity(moduleId: string): "critical" | "high" | "medium" | "low" {
-  if (moduleId.includes("threat") || moduleId.includes("identity")) return "critical";
-  if (moduleId.includes("firewall") || moduleId.includes("ransomware")) return "high";
+  if (
+    moduleId.includes("threat") ||
+    moduleId.includes("identity") ||
+    moduleId.includes("compliance") ||
+    moduleId.includes("code-integrity") ||
+    moduleId.includes("secret")
+  ) {
+    return "critical";
+  }
+  if (
+    moduleId.includes("firewall") ||
+    moduleId.includes("ransomware") ||
+    moduleId.includes("incident") ||
+    moduleId.includes("lateral") ||
+    moduleId.includes("remote-access") ||
+    moduleId.includes("supply-chain") ||
+    moduleId.includes("backup") ||
+    moduleId.includes("cloud")
+  ) {
+    return "high";
+  }
   if (moduleId.includes("net.")) return "medium";
   return "low";
 }
@@ -45,14 +64,24 @@ function mapModuleToCommand(moduleId: string): { commandId: string; requestedPar
       return { commandId: "security.firewall.status", requestedParams: { profile: "public" } };
     case "host.identity-admins":
       return { commandId: "diagnostic.system.info", requestedParams: {} };
+    case "identity.mfa-posture":
+      return { commandId: "security.mfa.status", requestedParams: { scope: "all" } };
+    case "identity.secrets-exposure":
+      return { commandId: "security.secret-scanning.status", requestedParams: { scope: "all" } };
     case "host.surface-ports":
       return { commandId: "diagnostic.system.info", requestedParams: {} };
+    case "app.supply-chain":
+      return { commandId: "security.software-integrity.status", requestedParams: { framework: "supply-chain" } };
     case "host.code-integrity":
       return { commandId: "security.driver-signing.status", requestedParams: {} };
     case "host.lateral-movement":
       return { commandId: "security.credential-guard.status", requestedParams: {} };
+    case "host.cloud-saas-posture":
+      return { commandId: "diagnostic.cloud.config", requestedParams: { provider: "all" } };
     case "net.host-segment":
       return { commandId: "security.firewall.status", requestedParams: { profile: "private" } };
+    case "net.remote-access":
+      return { commandId: "security.remote-access.status", requestedParams: { mode: "all" } };
     case "threat.hunt-lite":
       return { commandId: "diagnostic.process.enum", requestedParams: {} };
     case "threat.hunt-deep":
@@ -65,6 +94,8 @@ function mapModuleToCommand(moduleId: string): { commandId: string; requestedPar
       return { commandId: "security.firewall.status", requestedParams: { framework: "pci-dss" } };
     case "compliance.soc2":
       return { commandId: "security.audit-logging.status", requestedParams: { framework: "soc2" } };
+    case "compliance.cis":
+      return { commandId: "security.benchmark.status", requestedParams: { framework: "cis" } };
     case "resilience.backup":
       return { commandId: "diagnostic.backup-status.check", requestedParams: {} };
     case "resilience.ransomware":
