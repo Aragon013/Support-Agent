@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "fs";
 import path from "path";
 
@@ -33,6 +33,61 @@ app.setPath("userData", userDataPath);
 app.setPath("sessionData", sessionDataPath);
 
 let mainWindow: BrowserWindow | null = null;
+let backendProcess: ChildProcess | null = null;
+
+// ---------------------------------------------------------------------------
+// On-demand backend (control-plane) — only started when user activates SecAudit.
+// In dev mode, dev.mjs already handles the backend process.
+// ---------------------------------------------------------------------------
+function startBackend(): boolean {
+  if (isDev) return true; // dev.mjs handles it
+  if (backendProcess && !backendProcess.killed) return true;
+
+  const serverPath = path.join(__dirname, "../backend/server.js");
+  if (!fs.existsSync(serverPath)) {
+    console.error("[backend] server.js not found at", serverPath);
+    return false;
+  }
+
+  backendProcess = spawn(process.execPath, [serverPath], {
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      HOST: "127.0.0.1",
+      PORT: "3000",
+      ADMIN_API_KEY: process.env.ADMIN_API_KEY ?? "rsp-prod-key-change-me",
+    },
+    stdio: "pipe",
+    windowsHide: true,
+  });
+
+  backendProcess.stdout?.on("data", (d: Buffer) =>
+    console.log("[backend]", d.toString().trim()),
+  );
+  backendProcess.stderr?.on("data", (d: Buffer) =>
+    console.error("[backend]", d.toString().trim()),
+  );
+  backendProcess.on("exit", (code) => {
+    console.error("[backend] exited with code", code);
+    backendProcess = null;
+    mainWindow?.webContents.send("backend:status-changed", "stopped");
+  });
+
+  console.log("[backend] started on-demand (pid", backendProcess.pid, ")");
+  return true;
+}
+
+function stopBackend(): void {
+  if (backendProcess && !backendProcess.killed) {
+    backendProcess.kill();
+    backendProcess = null;
+  }
+}
+
+function backendRunning(): boolean {
+  if (isDev) return true;
+  return backendProcess !== null && !backendProcess.killed;
+}
 
 function runPowerShell(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -145,13 +200,29 @@ ipcMain.handle("window:maximize", () => {
 ipcMain.handle("window:close", () => mainWindow?.close());
 ipcMain.handle("secaudit:client-run", async (_event, payload: ClientAuditRequest) => runClientAudit(payload));
 
+// SecAudit backend lifecycle — triggered on-demand from the renderer
+ipcMain.handle("backend:start", () => {
+  const ok = startBackend();
+  return { ok, running: backendRunning() };
+});
+ipcMain.handle("backend:stop", () => {
+  stopBackend();
+  return { running: false };
+});
+ipcMain.handle("backend:status", () => ({ running: backendRunning() }));
+
 app.whenReady().then(() => {
+  // Backend is NOT started here — user activates it from the SecAudit panel.
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
+});
+
+app.on("before-quit", () => {
+  stopBackend();
 });
 
 app.on("window-all-closed", () => {

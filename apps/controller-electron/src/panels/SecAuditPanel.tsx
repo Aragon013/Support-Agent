@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck,
@@ -569,6 +569,41 @@ function categoryLabel(cat: AuditModule["category"]): string {
 }
 
 export function SecAuditPanel() {
+  // ── Backend gate ──────────────────────────────────────────────────────────
+  type BackendState = "unknown" | "starting" | "running" | "stopped" | "error";
+  const [backendState, setBackendState] = useState<BackendState>("unknown");
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.backendStatus) {
+      // Running in browser dev without Electron — assume running
+      setBackendState("running");
+      return;
+    }
+    api.backendStatus().then((r: { running: boolean }) =>
+      setBackendState(r.running ? "running" : "stopped"),
+    );
+    api.onBackendStopped?.(() => setBackendState("stopped"));
+  }, []);
+
+  const handleActivate = async () => {
+    setBackendState("starting");
+    try {
+      const api = (window as any).electronAPI;
+      const r = await api.backendStart();
+      // Give the server a moment to bind
+      await new Promise((res) => setTimeout(res, 1200));
+      setBackendState(r.running ? "running" : "error");
+    } catch {
+      setBackendState("error");
+    }
+  };
+
+  const handleDeactivate = async () => {
+    const api = (window as any).electronAPI;
+    await api?.backendStop();
+    setBackendState("stopped");
+  };
   const [selectedPackage, setSelectedPackage] = useState<PackageId>("quick");
   const [targetOs, setTargetOs] = useState<OSType>("windows");
   const [originFilter, setOriginFilter] = useState<AuditOrigin | "all">("all");
@@ -1185,6 +1220,48 @@ export function SecAuditPanel() {
 
   return (
     <div className="flex flex-col gap-5 p-6 text-slate-900">
+
+      {/* ── Backend activation gate ── */}
+      {backendState !== "running" && (
+        <div className="flex flex-col items-center justify-center gap-6 rounded-2xl border border-blue-100 bg-white px-8 py-16 text-center shadow-sm">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand/10">
+            <ShieldCheck className="h-8 w-8 text-brand" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">SecAudit — Módulo de Auditoría</h2>
+            <p className="mt-2 max-w-md text-sm text-slate-500">
+              Este módulo requiere el motor de análisis activo. Consume recursos solo mientras está habilitado.
+              Puedes desactivarlo en cualquier momento.
+            </p>
+          </div>
+
+          {backendState === "error" && (
+            <p className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
+              No se pudo iniciar el motor. Comprueba que la aplicación esté correctamente instalada.
+            </p>
+          )}
+
+          {backendState === "starting" ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+              </svg>
+              Iniciando motor de auditoría…
+            </div>
+          ) : (
+            <button
+              onClick={handleActivate}
+              className="rounded-xl bg-brand px-8 py-3 text-sm font-semibold text-white shadow transition hover:brightness-110"
+            >
+              Activar SecAudit
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Full panel (only rendered when backend is running) ── */}
+      {backendState === "running" && (<>
       <section className="tv-panel p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -2077,6 +2154,17 @@ export function SecAuditPanel() {
           </div>
         </section>
       </div>
+
+      {/* Deactivate button — always visible at the bottom when running */}
+      <div className="flex justify-end">
+        <button
+          onClick={handleDeactivate}
+          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500 transition hover:border-danger/30 hover:text-danger"
+        >
+          Desactivar motor SecAudit
+        </button>
+      </div>
+    </>)}
     </div>
   );
 }
