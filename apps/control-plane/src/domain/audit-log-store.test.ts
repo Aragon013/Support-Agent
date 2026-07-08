@@ -96,4 +96,31 @@ describe("InMemoryAuditLogStore", () => {
     store.clearRetentionDaysForTenant("tenant-1");
     expect(store.getRetentionDaysForTenant("tenant-1")).toBe(90);
   });
+
+  it("uses tenant-specific retention when purging by tenant", () => {
+    const old = new Date("2026-01-01T00:00:00.000Z");
+    const now = new Date("2026-07-07T00:00:00.000Z").getTime();
+    const store = new InMemoryAuditLogStore(90, () => now);
+    store.setRetentionDaysForTenant("tenant-short", 1);
+
+    // Retrocede el reloj para simular entradas antiguas.
+    const oldStore = new InMemoryAuditLogStore(90, () => old.getTime());
+    oldStore.setRetentionDaysForTenant("tenant-short", 1);
+
+    oldStore.append({
+      tenantId: "tenant-short",
+      operatorId: "operator-1",
+      code: "command.job.queued",
+      details: {},
+    });
+
+    const report = oldStore.purgeWithPolicy({
+      retentionDays: oldStore.getRetentionDaysForTenant("tenant-short"),
+      tenantId: "tenant-short",
+      nowMs: now,
+    });
+
+    expect(report.purged).toBe(1);
+    expect(report.byTenant["tenant-short"]).toBe(1);
+  });
 });

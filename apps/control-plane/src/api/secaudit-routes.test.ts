@@ -62,6 +62,21 @@ describe("secaudit routes", () => {
       url: `/api/v1/secaudit/plans/${plan.id}/run`,
     });
 
+    const before = await app.inject({
+      method: "GET",
+      url: `/api/v1/secaudit/plans/${plan.id}/results`,
+    });
+
+    expect(before.statusCode).toBe(200);
+    const beforeBody = before.json() as {
+      status: string;
+      summary: { clientRequired: number; running: number };
+      modules: Array<{ moduleId: string; status: string }>;
+    };
+    expect(beforeBody.status).toBe("running");
+    expect(beforeBody.summary.clientRequired).toBe(1);
+    expect(beforeBody.modules[0]?.status).toBe("client_required");
+
     const ingest = await app.inject({
       method: "POST",
       url: `/api/v1/secaudit/plans/${plan.id}/client-findings`,
@@ -86,9 +101,11 @@ describe("secaudit routes", () => {
     const body = results.json() as {
       status: string;
       modules: Array<{ moduleId: string; status: string; evidence?: string[] }>;
+      summary: { completed: number };
     };
 
     expect(body.status).toBe("completed");
+    expect(body.summary.completed).toBe(1);
     const module = body.modules.find((x) => x.moduleId === "net.client-health");
     expect(module?.status).toBe("completed");
     expect(module?.evidence?.[0]).toBe("ping=31ms");
