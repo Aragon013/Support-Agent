@@ -6,20 +6,22 @@ import { CommandPanel } from "@/panels/CommandPanel";
 import { JobsPanel } from "@/panels/JobsPanel";
 import { AuditPanel } from "@/panels/AuditPanel";
 import { SecAuditPanel } from "@/panels/SecAuditPanel";
+import { CompliancePanel } from "@/panels/CompliancePanel";
 import { MonitorPanel } from "@/panels/MonitorPanel";
 import { SessionsPanel } from "@/panels/SessionsPanel";
 import { SupportPanel } from "@/panels/SupportPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
 
 const PANELS: Record<NavTab, React.ElementType> = {
-  support:  SupportPanel,
-  commands: CommandPanel,
-  jobs:     JobsPanel,
-  audit:    AuditPanel,
-  secaudit: SecAuditPanel,
-  monitor:  MonitorPanel,
-  sessions: SessionsPanel,
-  settings: SettingsPanel,
+  support:    SupportPanel,
+  commands:   CommandPanel,
+  jobs:       JobsPanel,
+  audit:      AuditPanel,
+  secaudit:   SecAuditPanel,
+  compliance: CompliancePanel,
+  monitor:    MonitorPanel,
+  sessions:   SessionsPanel,
+  settings:   SettingsPanel,
 };
 
 export default function App() {

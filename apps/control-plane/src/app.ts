@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { registerCommandRoutesWithDeps } from "./api/command-routes.js";
 import { registerSessionRoutesWithDeps } from "./api/session-routes.js";
 import { registerSecAuditRoutesWithDeps } from "./api/secaudit-routes.js";
+import { registerComplianceRoutesWithDeps } from "./api/compliance-routes.js";
 import { InMemoryAuditLogStore } from "./domain/audit-log-store.js";
 import { InMemorySecAuditPlanStore } from "./domain/secaudit-plan-store.js";
 
@@ -40,6 +41,7 @@ export function buildApp(): FastifyInstance {
     registerCommandRoutesWithDeps(app, { auditStore, requireAdminKey });
     registerSessionRoutesWithDeps(app, { auditStore, requireAdminKey });
     registerSecAuditRoutesWithDeps(app, { auditStore, requireAdminKey, planStore });
+    registerComplianceRoutesWithDeps(app, { planStore });
   });
 
   app.get("/health", async () => {

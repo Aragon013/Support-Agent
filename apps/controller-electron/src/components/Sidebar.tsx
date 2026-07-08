@@ -5,21 +5,23 @@ import {
   LayoutList,
   ShieldCheck,
   Shield,
+  ClipboardCheck,
   Activity,
   Radio,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export type NavTab = "support" | "commands" | "jobs" | "audit" | "secaudit" | "monitor" | "sessions" | "settings";
+export type NavTab = "support" | "commands" | "jobs" | "audit" | "secaudit" | "compliance" | "monitor" | "sessions" | "settings";
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ElementType }[] = [
   { id: "support",  label: "Support",  icon: LifeBuoy },
   { id: "commands",  label: "Commands",  icon: Terminal },
   { id: "jobs",      label: "Jobs",      icon: LayoutList },
   { id: "audit",     label: "Audit",     icon: ShieldCheck },
-  { id: "secaudit",  label: "SecAudit",  icon: Shield },
-  { id: "monitor",   label: "Monitor",   icon: Activity },
+  { id: "secaudit",    label: "SecAudit",    icon: Shield },
+  { id: "compliance", label: "Compliance", icon: ClipboardCheck },
+  { id: "monitor",    label: "Monitor",    icon: Activity },
   { id: "sessions",  label: "Sessions",  icon: Radio },
   { id: "settings",  label: "Settings",  icon: Settings },
 ];
