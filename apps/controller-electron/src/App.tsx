@@ -14,11 +14,13 @@ import { MonitorPanel } from "@/panels/MonitorPanel";
 import { SessionsPanel } from "@/panels/SessionsPanel";
 import { SupportPanel } from "@/panels/SupportPanel";
 import { SettingsPanel } from "@/panels/SettingsPanel";
+import { CybersecurityPanel } from "@/panels/CybersecurityPanel";
 
 const PANELS: Record<NavTab, React.ElementType> = {
   support:    SupportPanel,
   commands:   CommandPanel,
   jobs:       JobsPanel,
+  cybersecurity: CybersecurityPanel,
   audit:      AuditPanel,
   secaudit:   SecAuditPanel,
   compliance: CompliancePanel,

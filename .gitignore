@@ -12,3 +12,4 @@ apps/controller-electron/dist-renderer/
 .DS_Store
 Thumbs.db
 .vscode/settings.json
+artifacts/

@@ -7,6 +7,19 @@ import { z } from "zod";
 
 const CommandParamSchema = z.record(z.string(), z.string().trim());
 
+type RiskLevel = "low" | "medium" | "high";
+
+type CommandParam =
+  | { key: string; type: "select"; options: readonly string[] }
+  | { key: string; type: "text"; placeholder?: string };
+
+type CatalogItem = {
+  id: string;
+  label: string;
+  risk: RiskLevel;
+  params: readonly CommandParam[];
+};
+
 const DispatchResultSchema = z.object({
   id: z.string(),
   status: z.enum(["queued", "mfa_pending", "blocked", "running", "completed", "failed", "cancelled"]),
@@ -18,14 +31,12 @@ const DispatchResultSchema = z.object({
 
 type DispatchResult = z.infer<typeof DispatchResultSchema>;
 
-const CATALOG = [
+const CATALOG: readonly CatalogItem[] = [
   { id: "diagnostic.system.info",   label: "System Info",       risk: "low",      params: [] },
   { id: "security.firewall.status", label: "Firewall Status",   risk: "low",      params: [{ key: "profile", type: "select", options: ["domain", "private", "public"] }] },
   { id: "maintenance.service.restart", label: "Restart Service", risk: "medium", params: [{ key: "serviceId", type: "text", placeholder: "e.g. Spooler" }] },
   { id: "maintenance.network.reset",   label: "Network Reset",   risk: "high",   params: [{ key: "mode", type: "select", options: ["soft", "full"] }] },
 ] as const;
-
-type RiskLevel = "low" | "medium" | "high";
 
 const RISK_BADGE: Record<RiskLevel, string> = {
   low:    "bg-success/15 text-success border-success/30",
@@ -34,7 +45,7 @@ const RISK_BADGE: Record<RiskLevel, string> = {
 };
 
 export function CommandPanel() {
-  const [selected, setSelected] = useState(CATALOG[0].id);
+  const [selected, setSelected] = useState<string>(CATALOG[0].id);
   const [params, setParams] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DispatchResult | null>(null);
@@ -140,7 +151,7 @@ export function CommandPanel() {
                       className="tv-input w-full appearance-none pr-8"
                     >
                       <option value="">Select…</option>
-                      {(p as { options: readonly string[] }).options.map((o) => (
+                      {p.options.map((o) => (
                         <option key={o} value={o}>{o}</option>
                       ))}
                     </select>
@@ -152,7 +163,7 @@ export function CommandPanel() {
                   <label className="mb-1 block text-xs capitalize text-slate-500">{p.key}</label>
                   <input
                     type="text"
-                    placeholder={"placeholder" in p ? p.placeholder : ""}
+                    placeholder={p.placeholder ?? ""}
                     value={params[p.key] ?? ""}
                     onChange={(e) => setParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
                     className="tv-input w-full"

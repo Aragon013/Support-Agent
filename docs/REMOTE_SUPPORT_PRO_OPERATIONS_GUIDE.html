@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>RemoteSupportPro - Guia Total de Operacion</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #111827;
+      --ink: #0b1220;
+      --text: #1f2937;
+      --muted: #475569;
+      --brand: #0ea5e9;
+      --line: #dbeafe;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(135deg, #e0f2fe 0%, #f8fafc 45%, #eef2ff 100%);
+      color: var(--text);
+      font-family: "Segoe UI", "Calibri", "Helvetica Neue", sans-serif;
+      line-height: 1.45;
+      padding: 30px;
+    }
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.14);
+    }
+    h1, h2, h3 { margin: 0 0 10px; color: #0f172a; }
+    h1 { font-size: 30px; letter-spacing: -0.02em; }
+    h2 {
+      margin-top: 22px;
+      font-size: 19px;
+      border-left: 4px solid var(--brand);
+      padding-left: 10px;
+    }
+    h3 { margin-top: 16px; font-size: 16px; color: #0b3a63; }
+    p, li { font-size: 14px; }
+    ul, ol { margin: 8px 0 12px 22px; }
+    .muted { color: var(--muted); }
+    .badge {
+      display: inline-block;
+      background: #e0f2fe;
+      color: #075985;
+      border: 1px solid #bae6fd;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      margin-bottom: 8px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid #dbeafe;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #f8fbff;
+    }
+    .flow {
+      border: 1px dashed #93c5fd;
+      border-radius: 10px;
+      background: #f0f9ff;
+      padding: 10px 12px;
+      font-weight: 600;
+      color: #075985;
+    }
+    .footer {
+      margin-top: 20px;
+      padding-top: 10px;
+      border-top: 1px solid #dbeafe;
+      font-size: 12px;
+      color: #64748b;
+    }
+    @page { size: A4; margin: 14mm; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <span class="badge">RemoteSupportPro</span>
+    <h1>Guia Total de Operacion y Uso</h1>
+    <p class="muted">Fecha: 2026-07-08 | Version: 1.0</p>
+
+    <h2>1) Que es este sistema</h2>
+    <p>RemoteSupportPro es una plataforma de soporte remoto para MSP con foco en seguridad operativa, trazabilidad y control por perfil de instalacion.</p>
+    <div class="grid">
+      <div class="card"><strong>Host Agent</strong><br/>Servicio nativo en segundo plano por endpoint.</div>
+      <div class="card"><strong>Control Plane</strong><br/>API central de sesiones, comandos, auditoria y politicas.</div>
+      <div class="card"><strong>Controller Electron</strong><br/>Cliente de operador con soporte + cybersecurity.</div>
+      <div class="card"><strong>Objetivo</strong><br/>Resolver soporte remoto sin perder control de riesgo.</div>
+    </div>
+
+    <h2>2) Para que sirve</h2>
+    <ul>
+      <li>Soporte remoto diario (view/control).</li>
+      <li>Comandos operativos con gating por perfil y tenant.</li>
+      <li>Auditoria de acciones y seguridad.</li>
+      <li>Compliance, excepciones, alertas y resiliencia defensiva.</li>
+    </ul>
+
+    <h2>3) Modelo de liberacion acordado</h2>
+    <h3>Windows</h3>
+    <ul>
+      <li>2 programas separados: Host Service + Controller Client.</li>
+      <li>El instalador del host permite elegir perfil: remote_only, support_limited_no_folders, support_full.</li>
+      <li>Ese perfil controla que funciones estaran habilitadas remotamente.</li>
+    </ul>
+    <h3>macOS</h3>
+    <ul>
+      <li>Un instalador por perfil de host (paquetes separados).</li>
+      <li>Simplifica permisos/plist/policies por tipo de despliegue.</li>
+    </ul>
+    <h3>Linux</h3>
+    <ul>
+      <li>Host por paquete/config equivalente con perfil definido.</li>
+    </ul>
+
+    <h2>4) Seguridad base</h2>
+    <ul>
+      <li>E2E obligatorio.</li>
+      <li>MFA obligatorio.</li>
+      <li>Logs y auditoria con retencion configurable (default 90 dias).</li>
+      <li>Aislamiento multi-tenant.</li>
+      <li>Gating por installProfile + rol + policy.</li>
+    </ul>
+
+    <h2>5) Secciones del Controller y como usarlas</h2>
+    <h3>Support</h3>
+    <p>Entrada rapida para soporte operativo. Crea sesion y dispara acciones iniciales.</p>
+
+    <h3>Commands</h3>
+    <p>Catalogo de comandos con parametros y riesgo. Ejecuta solo lo minimo necesario.</p>
+
+    <h3>Jobs</h3>
+    <p>Seguimiento en vivo por WebSocket del estado de ejecucion.</p>
+
+    <h3>Cybersecurity (seccion unificada)</h3>
+    <p>Toda la auditoria cyber en un solo lugar, con subtabs:</p>
+    <ul>
+      <li>SecAudit: crear/ejecutar planes y comparar baseline.</li>
+      <li>Compliance: evaluacion contra CIS, NIST CSF, ISO 27001, SOC2, PCI DSS.</li>
+      <li>Exceptions: aprobar/rechazar excepciones temporales.</li>
+      <li>Alerts: canales y envio de alertas de drift.</li>
+      <li>Resilience: ejercicios defensivos dry-run.</li>
+      <li>Audit Log: evidencia cronologica de eventos.</li>
+    </ul>
+    <div class="flow">Flujo sugerido: SecAudit -> Compliance -> Exceptions -> Alerts -> Audit Log</div>
+
+    <h3>Monitor</h3>
+    <p>Observabilidad operativa de estado y salud.</p>
+
+    <h3>Sessions</h3>
+    <p>Control avanzado por capacidades de sesion y perfil del endpoint.</p>
+
+    <h3>Settings</h3>
+    <p>Configuracion del cliente operador.</p>
+
+    <h2>6) Host profiles y capacidades</h2>
+    <ul>
+      <li><strong>remote_only</strong>: acceso remoto basico, sin acciones de alto impacto.</li>
+      <li><strong>support_limited_no_folders</strong>: soporte tecnico limitado, sin operaciones de carpeta.</li>
+      <li><strong>support_full</strong>: soporte completo segun rol/politica.</li>
+    </ul>
+
+    <h2>7) Runbook de operacion recomendado</h2>
+    <ol>
+      <li>Validar endpoint y perfil.</li>
+      <li>Abrir sesion segura.</li>
+      <li>Ejecutar comandos minimos necesarios.</li>
+      <li>Registrar evidencia en auditoria.</li>
+      <li>Correr SecAudit ante incidente o hardening.</li>
+      <li>Revisar compliance y excepciones.</li>
+      <li>Configurar alertas de drift.</li>
+    </ol>
+
+    <h2>8) Diagnostico rapido</h2>
+    <ul>
+      <li>UI negra: revisar ErrorBoundary y modulos del panel activo.</li>
+      <li>401 en alerts/resilience: validar API key y tenant.</li>
+      <li>Comando bloqueado: revisar installProfile + policy gates.</li>
+      <li>Sin evidencia: validar ingest de audit events en backend.</li>
+    </ul>
+
+    <h2>9) Referencias de codigo</h2>
+    <ul>
+      <li>Controller: apps/controller-electron/src</li>
+      <li>Control-plane: apps/control-plane/src</li>
+      <li>Host-agent: apps/host-agent/src</li>
+      <li>Documentacion: docs</li>
+    </ul>
+
+    <div class="footer">Documento de onboarding operativo y uso end-to-end para soporte y cybersecurity.</div>
+  </main>
+</body>
+</html>
