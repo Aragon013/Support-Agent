@@ -69,7 +69,7 @@ type AuditModule = {
   id: string;
   name: string;
   description: string;
-  category: "host_baseline" | "identity_access" | "app_surface" | "network" | "threat_hunt" | "resilience";
+  category: "host_baseline" | "identity_access" | "app_surface" | "network" | "threat_hunt" | "incident_response" | "resilience" | "compliance";
   origins: AuditOrigin[];
   os: OSType[];
   estimatedMin: number;
@@ -194,6 +194,94 @@ const MODULES: AuditModule[] = [
     level: "safe_light",
     defaultSeverity: "high",
   },
+  {
+    id: "threat.hunt-deep",
+    name: "Threat Hunt Deep",
+    description: "Advanced behavioral analysis, process chains, memory indicators and persistence mechanisms.",
+    category: "threat_hunt",
+    origins: ["host", "host_network"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 20,
+    level: "deep",
+    defaultSeverity: "critical",
+  },
+  {
+    id: "incident.response-readiness",
+    name: "Incident Response Readiness",
+    description: "Forensic artifact retention, logging posture, incident plan and playbook readiness.",
+    category: "incident_response",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 8,
+    level: "safe_light",
+    defaultSeverity: "high",
+  },
+  {
+    id: "compliance.hipaa",
+    name: "HIPAA Compliance Audit",
+    description: "PHI access controls, encryption, audit logging and breach notification readiness.",
+    category: "compliance",
+    origins: ["host", "host_network"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 15,
+    level: "deep",
+    defaultSeverity: "critical",
+  },
+  {
+    id: "compliance.pci-dss",
+    name: "PCI-DSS Compliance Audit",
+    description: "Cardholder data protection, network segmentation, firewall rules and access controls.",
+    category: "compliance",
+    origins: ["host", "host_network"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 18,
+    level: "deep",
+    defaultSeverity: "critical",
+  },
+  {
+    id: "compliance.soc2",
+    name: "SOC2 Compliance Audit",
+    description: "Security controls, availability, processing integrity, confidentiality and privacy.",
+    category: "compliance",
+    origins: ["host", "host_network"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 20,
+    level: "deep",
+    defaultSeverity: "critical",
+  },
+  {
+    id: "resilience.backup",
+    name: "Backup & Disaster Recovery",
+    description: "Backup frequency, retention, restore testing and RTO/RPO alignment verification.",
+    category: "resilience",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 10,
+    level: "safe_light",
+    defaultSeverity: "high",
+  },
+  {
+    id: "host.code-integrity",
+    name: "Code Integrity & Anti-Tampering",
+    description: "Signed driver verification, kernel module integrity, code signing enforcement.",
+    category: "host_baseline",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 7,
+    level: "deep",
+    defaultSeverity: "critical",
+  },
+  {
+    id: "host.lateral-movement",
+    name: "Lateral Movement Prevention",
+    description: "Segmentation, credential guard, constrained language mode and privilege model hardening.",
+    category: "host_baseline",
+    origins: ["host"],
+    os: ["windows", "linux", "macos"],
+    estimatedMin: 6,
+    level: "deep",
+    defaultSeverity: "high",
+  },
 ];
 
 const PACKAGES: AuditPackage[] = [
@@ -228,10 +316,14 @@ const PACKAGES: AuditPackage[] = [
       "host.firewall-edr",
       "host.identity-admins",
       "host.surface-ports",
+      "host.code-integrity",
+      "host.lateral-movement",
       "net.host-segment",
       "net.client-health",
       "threat.hunt-lite",
+      "threat.hunt-deep",
       "resilience.ransomware",
+      "resilience.backup",
     ],
   },
   {
@@ -239,14 +331,30 @@ const PACKAGES: AuditPackage[] = [
     label: "Incident Audit",
     description: "Incident-first checks for rapid containment and investigation.",
     estimatedRange: "10-25 min",
-    includes: ["host.identity-admins", "host.surface-ports", "threat.hunt-lite"],
+    includes: [
+      "host.identity-admins",
+      "host.surface-ports",
+      "threat.hunt-lite",
+      "threat.hunt-deep",
+      "incident.response-readiness",
+    ],
   },
   {
     id: "compliance",
     label: "Compliance Audit",
     description: "Policy-oriented baseline for control evidence collection.",
     estimatedRange: "20-45 min",
-    includes: ["host.os-posture", "host.firewall-edr", "host.identity-admins", "resilience.ransomware"],
+    includes: [
+      "host.os-posture",
+      "host.firewall-edr",
+      "host.identity-admins",
+      "host.code-integrity",
+      "resilience.ransomware",
+      "resilience.backup",
+      "compliance.hipaa",
+      "compliance.pci-dss",
+      "compliance.soc2",
+    ],
   },
   {
     id: "custom",
@@ -269,8 +377,12 @@ function categoryLabel(cat: AuditModule["category"]): string {
       return "Network";
     case "threat_hunt":
       return "Threat Hunt";
+    case "incident_response":
+      return "Incident Response";
     case "resilience":
       return "Resilience";
+    case "compliance":
+      return "Compliance";
   }
 }
 

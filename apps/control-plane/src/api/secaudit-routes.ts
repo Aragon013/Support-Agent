@@ -46,8 +46,28 @@ function mapModuleToCommand(moduleId: string): { commandId: string; requestedPar
       return { commandId: "diagnostic.system.info", requestedParams: {} };
     case "host.surface-ports":
       return { commandId: "diagnostic.system.info", requestedParams: {} };
+    case "host.code-integrity":
+      return { commandId: "security.driver-signing.status", requestedParams: {} };
+    case "host.lateral-movement":
+      return { commandId: "security.credential-guard.status", requestedParams: {} };
     case "net.host-segment":
       return { commandId: "security.firewall.status", requestedParams: { profile: "private" } };
+    case "threat.hunt-lite":
+      return { commandId: "diagnostic.process.enum", requestedParams: {} };
+    case "threat.hunt-deep":
+      return { commandId: "diagnostic.process.enum", requestedParams: { deep: true } };
+    case "incident.response-readiness":
+      return { commandId: "diagnostic.system.info", requestedParams: { forensic: true } };
+    case "compliance.hipaa":
+      return { commandId: "security.audit-logging.status", requestedParams: { framework: "hipaa" } };
+    case "compliance.pci-dss":
+      return { commandId: "security.firewall.status", requestedParams: { framework: "pci-dss" } };
+    case "compliance.soc2":
+      return { commandId: "security.audit-logging.status", requestedParams: { framework: "soc2" } };
+    case "resilience.backup":
+      return { commandId: "diagnostic.backup-status.check", requestedParams: {} };
+    case "resilience.ransomware":
+      return { commandId: "diagnostic.system.info", requestedParams: { ransomware: true } };
     default:
       return null;
   }
