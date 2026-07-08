@@ -2,6 +2,8 @@ node_modules/
 dist/
 build/
 coverage/
+apps/controller-electron/dist-electron/
+apps/controller-electron/dist-renderer/
 .env
 .env.*
 !.env.example
