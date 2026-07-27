@@ -4,6 +4,10 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react()],
+  // Use relative asset paths so the built index.html works when Electron loads
+  // it via file:// from inside the packaged app (app.asar). Absolute "/assets"
+  // paths resolve to the filesystem root under file:// and fail to load.
+  base: "./",
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

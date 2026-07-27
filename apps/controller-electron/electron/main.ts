@@ -16,7 +16,7 @@ type ClientAuditResponse = {
   error?: string;
 };
 
-const isDev = process.env.NODE_ENV !== "production";
+const isDev = !app.isPackaged && process.env.NODE_ENV !== "production";
 const RENDERER_URL = process.env.RSP_RENDERER_URL ?? "http://localhost:5173";
 const APP_DISPLAY_NAME = "RemoteSupportPro";
 
