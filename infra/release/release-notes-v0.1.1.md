@@ -15,7 +15,20 @@
 
 ## Release Assets
 
-### Windows
+### Windows (EXE installers)
+
+- RemoteSupportPro-Host-Setup-v0.1.1.exe
+  - Single Host installer with install-time profile selection page
+    (remote_only | support_limited_no_folders | support_full).
+  - Collects control-plane URL / tenant / endpoint, writes install-profile.json,
+    installs and starts the Windows service. Bundles Node runtime deps.
+  - Built via: infra/release/windows/build-host-windows-installer.ps1 (NSIS).
+- RemoteSupportPro-Controller-Setup-0.1.1.exe
+  - Assisted NSIS installer (per-user/per-machine choice + directory selection).
+  - Built via: infra/release/windows/build-controller-windows-installer.ps1
+    (electron-builder).
+
+### Windows (legacy ZIP bundles, npm-based)
 
 - RemoteSupportPro-Host-Windows-v0.1.1.zip
 - RemoteSupportPro-Controller-Windows-v0.1.1.zip

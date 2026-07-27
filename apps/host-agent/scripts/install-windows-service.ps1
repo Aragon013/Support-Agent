@@ -11,13 +11,29 @@ param(
   [string]$ServiceName,
   [string]$DisplayName,
   [int]$MaxConcurrent = 3,
-  [int]$TimeoutMs = 30000
+  [int]$TimeoutMs = 30000,
+  [ValidateSet("remote_only", "support_limited_no_folders", "support_full")]
+  [string]$InstallProfile
 )
 
 $ErrorActionPreference = "Stop"
 
 if (-not $IsWindows) {
   throw "This script only supports Windows."
+}
+
+if (-not $InstallProfile) {
+  Write-Host "Select Host support profile:" -ForegroundColor Cyan
+  Write-Host "  1) remote_only"
+  Write-Host "  2) support_limited_no_folders"
+  Write-Host "  3) support_full"
+  $choice = Read-Host "Enter option (1-3)"
+  switch ($choice) {
+    "1" { $InstallProfile = "remote_only" }
+    "2" { $InstallProfile = "support_limited_no_folders" }
+    "3" { $InstallProfile = "support_full" }
+    default { throw "Invalid option. Use 1, 2 or 3." }
+  }
 }
 
 $agentRoot = Split-Path -Parent $PSScriptRoot
@@ -47,9 +63,20 @@ $configJson = [ordered]@{
   endpointId = $EndpointId
   maxConcurrent = $MaxConcurrent
   timeoutMs = $TimeoutMs
+  installProfile = $InstallProfile
+  supportCommandsAllowed = $InstallProfile -ne "remote_only"
+  folderActionsAllowed = $InstallProfile -eq "support_full"
 } | ConvertTo-Json
 
 Set-Content -Path $configPath -Value $configJson -Encoding UTF8
+
+# Persist the selected profile next to the agent as the local capability baseline.
+$profilePath = Join-Path $agentRoot "install-profile.json"
+[ordered]@{
+  installProfile = $InstallProfile
+  supportCommandsAllowed = $InstallProfile -ne "remote_only"
+  folderActionsAllowed = $InstallProfile -eq "support_full"
+} | ConvertTo-Json -Depth 3 | Set-Content -Path $profilePath -Encoding UTF8
 
 $serviceExists = $false
 try {

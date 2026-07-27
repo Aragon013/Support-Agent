@@ -1,0 +1,46 @@
+appId: com.remotesupportpro.controller
+productName: RemoteSupportPro Controller
+copyright: Copyright © RemoteSupportPro
+
+# Directory that already contains the compiled output produced by `npm run build`.
+directories:
+  output: ../../artifacts/releases/controller/windows/installer
+  buildResources: build
+
+# Files packaged inside the app (app.asar).
+files:
+  - dist-electron/**/*
+  - dist-renderer/**/*
+  - package.json
+
+# The control-plane backend + its production node_modules are copied into
+# dist-electron by scripts/copy-backend.mjs and must stay unpacked so Node can
+# spawn them as a child process at runtime.
+asarUnpack:
+  - dist-electron/backend/**/*
+  - dist-electron/backend_modules/**/*
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: RemoteSupportPro-Controller-Setup-${version}.${ext}
+  # icon: build/icon.ico   # optional: drop a 256x256 icon.ico in build/ to brand it
+
+# Assisted installer (wizard) with installation-type selection:
+#  - user chooses per-user vs per-machine (installation type)
+#  - user can change the installation directory
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: RemoteSupportPro Controller
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  installerLanguages:
+    - en_US
+    - es_ES
