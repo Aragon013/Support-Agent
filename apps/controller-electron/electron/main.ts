@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import net from "node:net";
 import fs from "fs";
 import path from "path";
 
@@ -39,42 +40,86 @@ let backendProcess: ChildProcess | null = null;
 // On-demand backend (control-plane) — only started when user activates SecAudit.
 // In dev mode, dev.mjs already handles the backend process.
 // ---------------------------------------------------------------------------
+const BACKEND_HOST = "127.0.0.1";
+const BACKEND_PORT = 3000;
+
 function startBackend(): boolean {
   if (isDev) return true; // dev.mjs handles it
   if (backendProcess && !backendProcess.killed) return true;
 
-  const serverPath = path.join(__dirname, "../backend/server.js");
+  // In the packaged app the backend ships as an extraResource (copied verbatim,
+  // node_modules preserved) under resources/backend. In an unpackaged run
+  // (e.g. `electron dist-electron/main.js`) fall back to the local build output.
+  const serverPath = app.isPackaged
+    ? path.join(process.resourcesPath, "backend", "server.js")
+    : path.join(__dirname, "backend", "server.js");
   if (!fs.existsSync(serverPath)) {
     console.error("[backend] server.js not found at", serverPath);
     return false;
   }
 
+  const logPath = path.join(userDataPath, "backend.log");
+  const logLine = (msg: string) => {
+    try {
+      fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`);
+    } catch {
+      /* ignore logging failures */
+    }
+  };
+
   backendProcess = spawn(process.execPath, [serverPath], {
     env: {
       ...process.env,
+      // Run the Electron binary as plain Node so it executes server.js instead
+      // of launching another GUI instance.
+      ELECTRON_RUN_AS_NODE: "1",
       NODE_ENV: "production",
-      HOST: "127.0.0.1",
-      PORT: "3000",
+      HOST: BACKEND_HOST,
+      PORT: String(BACKEND_PORT),
       ADMIN_API_KEY: process.env.ADMIN_API_KEY ?? "rsp-prod-key-change-me",
     },
     stdio: "pipe",
     windowsHide: true,
   });
 
-  backendProcess.stdout?.on("data", (d: Buffer) =>
-    console.log("[backend]", d.toString().trim()),
-  );
-  backendProcess.stderr?.on("data", (d: Buffer) =>
-    console.error("[backend]", d.toString().trim()),
-  );
+  backendProcess.stdout?.on("data", (d: Buffer) => logLine(`[out] ${d.toString().trim()}`));
+  backendProcess.stderr?.on("data", (d: Buffer) => logLine(`[err] ${d.toString().trim()}`));
+  backendProcess.on("error", (err) => logLine(`[spawn-error] ${err.message}`));
   backendProcess.on("exit", (code) => {
-    console.error("[backend] exited with code", code);
+    logLine(`[exit] code=${code}`);
     backendProcess = null;
     mainWindow?.webContents.send("backend:status-changed", "stopped");
   });
 
-  console.log("[backend] started on-demand (pid", backendProcess.pid, ")");
+  logLine(`[start] pid=${backendProcess.pid} server=${serverPath}`);
   return true;
+}
+
+/** Resolves true once the backend is accepting TCP connections, or false on timeout. */
+function waitForBackendReady(timeoutMs = 8000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      if (!backendProcess || backendProcess.killed) {
+        resolve(false);
+        return;
+      }
+      const socket = net.connect(BACKEND_PORT, BACKEND_HOST);
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        if (Date.now() >= deadline) {
+          resolve(false);
+        } else {
+          setTimeout(attempt, 250);
+        }
+      });
+    };
+    attempt();
+  });
 }
 
 function stopBackend(): void {
@@ -205,9 +250,11 @@ ipcMain.handle("window:close", () => mainWindow?.close());
 ipcMain.handle("secaudit:client-run", async (_event, payload: ClientAuditRequest) => runClientAudit(payload));
 
 // SecAudit backend lifecycle — triggered on-demand from the renderer
-ipcMain.handle("backend:start", () => {
+ipcMain.handle("backend:start", async () => {
   const ok = startBackend();
-  return { ok, running: backendRunning() };
+  if (!ok) return { ok: false, running: false };
+  const running = isDev ? true : await waitForBackendReady();
+  return { ok, running };
 });
 ipcMain.handle("backend:stop", () => {
   stopBackend();

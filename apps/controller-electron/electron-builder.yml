@@ -7,18 +7,21 @@ directories:
   output: ../../artifacts/releases/controller/windows/installer
   buildResources: build
 
-# Files packaged inside the app (app.asar).
+# Files packaged inside the app (app.asar). The backend is intentionally
+# excluded here and shipped via extraResources instead (see below), because
+# electron-builder prunes nested node_modules inside the asar.
 files:
   - dist-electron/**/*
+  - "!dist-electron/backend/**/*"
   - dist-renderer/**/*
   - package.json
 
-# The control-plane backend + its production node_modules are copied into
-# dist-electron by scripts/copy-backend.mjs and must stay unpacked so Node can
-# spawn them as a child process at runtime.
-asarUnpack:
-  - dist-electron/backend/**/*
-  - dist-electron/backend_modules/**/*
+# The control-plane backend + its production node_modules are copied verbatim
+# (node_modules preserved) into resources/backend so Node can spawn it as a
+# child process at runtime.
+extraResources:
+  - from: dist-electron/backend
+    to: backend
 
 win:
   target:
