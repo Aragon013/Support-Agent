@@ -458,14 +458,25 @@ function formatUptime(seconds: number): string {
   return `${minutes}m`;
 }
 
+/** Clave admin de desarrollo. En producción se resuelve por sesión de operador. */
+const DEV_ADMIN_KEY = "dev-insecure-key-change-in-prod";
+
+type EndpointOption = {
+  endpointId: string;
+  installProfile?: InstallProfile;
+  licenseStatus?: "active" | "inactive";
+};
+
 function formatJobSummary(job: JobRecord): string {
   return `${job.catalogCommandId} · ${job.status.replaceAll("_", " ")}`;
 }
 
 export function SupportPanel() {
-  const [tenantId, setTenantId] = useState("");
-  const [operatorId, setOperatorId] = useState("");
+  const [tenantId, setTenantId] = useState("tenant-1");
+  const [operatorId, setOperatorId] = useState("op-1");
   const [target, setTarget] = useState("");
+  const [endpoints, setEndpoints] = useState<EndpointOption[]>([]);
+  const [endpointsLoading, setEndpointsLoading] = useState(false);
   const [catalog, setCatalog] = useState<CommandCatalogItem[]>(CATALOG_FALLBACK);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [selectedCommand, setSelectedCommand] = useState(CATALOG_FALLBACK[0].id);
@@ -476,7 +487,7 @@ export function SupportPanel() {
   const [jobTranscript, setJobTranscript] = useState<string[]>([]);
   const [recentJobs, setRecentJobs] = useState<RecentJobSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [commandHint, setCommandHint] = useState<string>("Enter an IP, hostname or endpoint id, then probe the machine.");
+  const [commandHint, setCommandHint] = useState<string>("Elige una PC en el campo Target (o escribe su IP/hostname) y pulsa Run Probe.");
   const [installProfile, setInstallProfile] = useState<InstallProfile>("support_full");
   const [policyLoading, setPolicyLoading] = useState(false);
   const [policyError, setPolicyError] = useState<string | null>(null);
@@ -512,6 +523,34 @@ export function SupportPanel() {
     void loadCatalog();
     return () => { cancelled = true; };
   }, []);
+
+  // Cargar lista de endpoints (PCs) registrados para el selector de Target
+  const loadEndpoints = useMemo(
+    () => async (signal?: AbortSignal) => {
+      setEndpointsLoading(true);
+      try {
+        const res = await fetch(apiUrl("/api/v1/endpoints"), {
+          headers: { "x-api-key": DEV_ADMIN_KEY },
+          signal,
+        });
+        if (!res.ok) throw new Error(`endpoints_http_${res.status}`);
+        const body = await res.json() as { items?: EndpointOption[] };
+        const items = (body.items ?? []).filter((e) => typeof e.endpointId === "string");
+        setEndpoints(items);
+      } catch {
+        // Sin lista: el usuario aún puede escribir IP/hostname a mano
+      } finally {
+        if (!signal?.aborted) setEndpointsLoading(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadEndpoints(controller.signal);
+    return () => controller.abort();
+  }, [loadEndpoints]);
 
   const command = useMemo(
     () => catalog.find((item) => item.id === selectedCommand) ?? catalog[0],
@@ -1124,31 +1163,62 @@ export function SupportPanel() {
             <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">1. Target</p>
             <div className="grid gap-3 md:grid-cols-[1.3fr_0.85fr_0.85fr]">
               <label className="grid gap-1.5">
-                <span className="text-xs font-medium text-slate-600">Machine / IP / Hostname</span>
+                <span className="flex items-center justify-between text-xs font-medium text-slate-600">
+                  <span>PC a soportar (endpoint)</span>
+                  <button
+                    type="button"
+                    onClick={() => void loadEndpoints()}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-brand hover:underline disabled:opacity-50"
+                    disabled={endpointsLoading}
+                    title="Recargar la lista de PCs conectadas"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", endpointsLoading && "animate-spin")} />
+                    {endpointsLoading ? "Cargando…" : "Refrescar"}
+                  </button>
+                </span>
                 <input
                   value={target}
                   onChange={(e) => setTarget(e.target.value)}
-                  placeholder="e.g. 10.0.1.42, helpdesk-laptop, ENDPOINT-ACCT-17"
+                  list="rsp-endpoint-options"
+                  placeholder="Elige una PC de la lista o escribe IP / hostname"
                   className="rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand"
                 />
+                <datalist id="rsp-endpoint-options">
+                  {endpoints.map((ep) => (
+                    <option key={ep.endpointId} value={ep.endpointId}>
+                      {ep.installProfile ? `${ep.installProfile}${ep.licenseStatus ? ` · ${ep.licenseStatus}` : ""}` : ""}
+                    </option>
+                  ))}
+                </datalist>
+                <span className="text-[11px] leading-tight text-slate-400">
+                  {endpoints.length > 0
+                    ? `${endpoints.length} PC(s) registradas. Es el ID que pusiste al instalar el host-agent.`
+                    : "Aún no hay PCs registradas. En modo local usa endpoint-1."}
+                </span>
               </label>
               <label className="grid gap-1.5">
-                <span className="text-xs font-medium text-slate-600">Tenant</span>
+                <span className="text-xs font-medium text-slate-600">Cliente (tenant)</span>
                 <input
                   value={tenantId}
                   onChange={(e) => setTenantId(e.target.value)}
-                  placeholder="Tenant ID"
-                  className="rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-brand"
+                  placeholder="tenant-1"
+                  className="rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand"
                 />
+                <span className="text-[11px] leading-tight text-slate-400">
+                  Empresa/cliente. Deja <code>tenant-1</code> para pruebas locales.
+                </span>
               </label>
               <label className="grid gap-1.5">
-                <span className="text-xs font-medium text-slate-600">Operator</span>
+                <span className="text-xs font-medium text-slate-600">Tú (operador)</span>
                 <input
                   value={operatorId}
                   onChange={(e) => setOperatorId(e.target.value)}
-                  placeholder="Operator ID"
-                  className="rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-brand"
+                  placeholder="op-1"
+                  className="rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand"
                 />
+                <span className="text-[11px] leading-tight text-slate-400">
+                  Tu identificador de técnico. Cualquier nombre, ej. <code>op-1</code>.
+                </span>
               </label>
             </div>
 

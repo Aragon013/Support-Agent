@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed:endpoints": "node scripts/seed-endpoints.mjs"
+    "seed:endpoints": "node scripts/seed-endpoints.mjs",
+    "guide:pdf": "node scripts/generate-user-guide-pdf.mjs"
   },
   "dependencies": {
     "@fastify/rate-limit": "^11.1.0",

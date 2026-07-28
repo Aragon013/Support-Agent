@@ -58,3 +58,78 @@
   .drag-region { -webkit-app-region: drag; }
   .no-drag { -webkit-app-region: no-drag; }
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * DARK THEME
+ * Retrofit global: remapea las clases claras usadas en los paneles a tonos
+ * oscuros cuando <html> tiene la clase `.dark`. Evita editar cada panel.
+ * ──────────────────────────────────────────────────────────────────────────── */
+.dark {
+  --d-bg-a: #0b1a2e;
+  --d-bg-b: #060f1e;
+  --d-surface: #111f34;
+  --d-surface-2: #16273f;
+  --d-surface-3: #1c3149;
+  --d-border: #26384f;
+  --d-text: #e6edf5;
+  --d-text-2: #c6d2e0;
+  --d-text-3: #93a3b8;
+  --d-text-4: #6b7d94;
+}
+
+.dark body {
+  @apply text-slate-100;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(11, 132, 255, 0.10), transparent 34%),
+    radial-gradient(circle at 100% 100%, rgba(76, 198, 255, 0.07), transparent 30%),
+    linear-gradient(180deg, var(--d-bg-a) 0%, var(--d-bg-b) 100%);
+}
+
+/* Component classes */
+.dark .tv-panel {
+  background: color-mix(in srgb, var(--d-surface) 96%, transparent);
+  border-color: var(--d-border);
+}
+.dark .tv-card { background: var(--d-surface); border-color: var(--d-border); }
+.dark .tv-card-soft { background: var(--d-surface-2); border-color: var(--d-border); }
+.dark .tv-input {
+  background: var(--d-surface); border-color: var(--d-border); color: var(--d-text);
+}
+.dark .tv-button-secondary,
+.dark .tv-button-soft { background: var(--d-surface-2); border-color: var(--d-border); color: var(--d-text-2); }
+.dark .tv-empty { background: color-mix(in srgb, var(--d-surface) 96%, transparent); border-color: var(--d-border); color: var(--d-text-3); }
+
+/* Backgrounds */
+.dark .bg-white,
+.dark .bg-white\/95,
+.dark .bg-white\/90 { background-color: var(--d-surface) !important; }
+.dark .bg-slate-50,
+.dark .bg-blue-50,
+.dark .bg-blue-50\/70,
+.dark .bg-slate-100 { background-color: var(--d-surface-2) !important; }
+.dark .bg-blue-100,
+.dark .bg-slate-200 { background-color: var(--d-surface-3) !important; }
+
+/* Text */
+.dark .text-slate-900 { color: var(--d-text) !important; }
+.dark .text-slate-800,
+.dark .text-slate-700 { color: var(--d-text-2) !important; }
+.dark .text-slate-600,
+.dark .text-slate-500 { color: var(--d-text-3) !important; }
+.dark .text-slate-400 { color: var(--d-text-4) !important; }
+
+/* Borders */
+.dark .border-blue-100,
+.dark .border-blue-50,
+.dark .border-slate-100,
+.dark .border-slate-200 { border-color: var(--d-border) !important; }
+
+/* Inputs escritos con clases crudas */
+.dark input,
+.dark select,
+.dark textarea {
+  color: var(--d-text);
+}
+.dark input::placeholder,
+.dark textarea::placeholder { color: var(--d-text-4); }
+

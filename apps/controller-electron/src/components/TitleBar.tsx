@@ -31,6 +31,9 @@ export function TitleBar() {
         <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-50/90">
           Control Center
         </span>
+        <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-blue-50/90">
+          v{__APP_VERSION__}
+        </span>
       </div>
       <div className="flex items-center gap-1 no-drag">
         <TitleButton onClick={() => api?.minimizeWindow()} label="Minimize">
