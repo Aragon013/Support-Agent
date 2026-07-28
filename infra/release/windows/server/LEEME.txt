@@ -1,0 +1,32 @@
+========================================================
+ RemoteSupportPro - Servidor de 1 clic
+========================================================
+
+QUE ES:
+ El "cerebro" (control-plane) al que se conectan tu Controller y todos
+ los host. Corre en la PC que tu elijas como servidor (puede ser tu PC
+ de casa o una PC fija de la oficina). NO necesita pagar nada.
+
+COMO USARLO:
+
+ 1) Copia esta carpeta a la PC que sera el servidor.
+
+ 2) (Recomendado, gratis) Instala Tailscale en esa PC y en cada PC host:
+      - https://tailscale.com/download
+      - Inicia sesion con la misma cuenta en todas.
+      - Asi cada PC tiene una IP fija 100.x que funciona desde
+        cualquier red, sin abrir puertos ni pagar VPS.
+
+ 3) Doble clic en "Start-Server.bat".
+      - Te mostrara la URL a usar (ej. http://100.x.x.x:3000).
+      - Deja la ventana ABIERTA mientras das soporte.
+
+ 4) Esa URL la pones en el "config.txt" del instalador del host
+    (ControlPlaneUrl). La misma URL sirve para todos los host.
+
+NOTAS:
+ - No necesitas Node instalado: viene incluido en la carpeta "node".
+ - Si todas las PC estan en la MISMA red, puedes usar la IP local
+   (192.168.x) que tambien aparece, y ni necesitas Tailscale.
+ - Para que arranque solo con Windows, usa "Install-Server-Service.bat".
+========================================================
