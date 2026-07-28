@@ -14,8 +14,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..", "..");
-const inputPath = join(repoRoot, "docs", "USER_GUIDE.md");
-const outputPath = join(repoRoot, "docs", "USER_GUIDE.pdf");
+// Argumentos opcionales: node generate-user-guide-pdf.mjs [entrada.md] [salida.pdf]
+const argIn = process.argv[2];
+const argOut = process.argv[3];
+const inputPath = argIn ? (argIn.includes("\\") || argIn.includes("/") ? argIn : join(repoRoot, "docs", argIn)) : join(repoRoot, "docs", "USER_GUIDE.md");
+const outputPath = argOut ? (argOut.includes("\\") || argOut.includes("/") ? argOut : join(repoRoot, "docs", argOut)) : join(repoRoot, "docs", "USER_GUIDE.pdf");
 const tmpPath = `${outputPath}.tmp`;
 
 const md = readFileSync(inputPath, "utf8");
