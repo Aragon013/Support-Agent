@@ -30,6 +30,10 @@ win:
         - x64
   artifactName: RemoteSupportPro-Controller-Setup-${version}.${ext}
   # icon: build/icon.ico   # optional: drop a 256x256 icon.ico in build/ to brand it
+  # Firma de código Authenticode. Usa build/sign.js, que delega en
+  # infra/release/windows/sign-artifact.ps1 (firma si hay cert configurado por
+  # variables de entorno; si no, no firma). Ver README_SIGNING.md.
+  sign: build/sign.js
 
 # Assisted installer (wizard) with installation-type selection:
 #  - user chooses per-user vs per-machine (installation type)

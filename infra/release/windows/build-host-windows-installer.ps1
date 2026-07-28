@@ -102,4 +102,8 @@ $built = Join-Path $PSScriptRoot $outFile
 Move-Item -Force $built (Join-Path $hostOut $outFile)
 Remove-Item -Recurse -Force $stage
 
+# Firma de código (Authenticode). Solo firma si hay certificado configurado;
+# de lo contrario avisa y sigue. Ver README_SIGNING.md.
+& (Join-Path $PSScriptRoot "sign-artifact.ps1") -Path (Join-Path $hostOut $outFile)
+
 Write-Host "[release] Created $(Join-Path $hostOut $outFile)"
