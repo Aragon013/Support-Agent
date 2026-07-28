@@ -1,0 +1,30 @@
+========================================================
+ RemoteSupportPro - Host de 1 clic (sin comandos)
+========================================================
+
+PARA INSTALAR EN CADA PC:
+
+ 1) Abre "config.txt" y rellena UNA sola vez:
+      - ControlPlaneUrl : la direccion de tu servidor.
+      - TenantId        : tu cliente (ej. tenant-1).
+      - InstallProfile  : support_full (o el que quieras).
+      - EndpointId      : dejalo VACIO (usa el nombre de la PC solo).
+
+ 2) Copia toda esta carpeta a la PC destino.
+
+ 3) Doble clic en "Install-Host.bat".
+      - Windows pedira permiso de administrador: pulsa "Si".
+      - Se instala y arranca el servicio solo. Listo.
+
+PARA QUITARLO:
+
+ - Doble clic en "Uninstall-Host.bat" y pulsa "Si".
+
+NOTAS:
+
+ - No necesitas tener Node instalado: viene incluido en la carpeta "node".
+ - No escribes ningun comando: todo es doble clic.
+ - El servicio arranca automaticamente con Windows.
+ - Como usa componentes ya firmados por Microsoft, NO lo bloquea
+   "Control inteligente de aplicaciones".
+========================================================

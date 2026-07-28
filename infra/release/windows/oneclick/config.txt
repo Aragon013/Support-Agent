@@ -1,0 +1,14 @@
+# ============================================================================
+#  Configuracion del Host (rellena esto UNA vez antes de repartir la carpeta)
+# ============================================================================
+#  - ControlPlaneUrl: la direccion de tu servidor backend.
+#  - TenantId: el identificador de tu cliente/empresa (ej. tenant-1).
+#  - InstallProfile: remote_only | support_limited_no_folders | support_full
+#  - EndpointId: DEJALO VACIO para que use el nombre de cada PC automaticamente
+#                (asi es unico por maquina sin que escribas nada).
+# ============================================================================
+
+ControlPlaneUrl=http://TU-SERVIDOR:3000
+TenantId=tenant-1
+InstallProfile=support_full
+EndpointId=
